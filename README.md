@@ -2,7 +2,7 @@
 
 This repository trains a strictly causal, language-conditioned 201-bin distributional value model on local DROID success/failure data. During training, a LAPO teacher extracts a 32D transition latent from the current frame and a future frame. The deployed model reads only three history frames, a coarse task-language prompt, and `observation.images.left_external`; it never sees future frames.
 
-Method notes: [docs/recap_value_model_research.md](docs/recap_value_model_research.md). Architecture I/O: [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).
+Method notes: [docs/recap_value_model_research.md](docs/recap_value_model_research.md). Architecture I/O: [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md). Full tabulated results: [docs/experiment_results.md](docs/experiment_results.md). Interactive HTML: [experiment_summary.html](experiment_summary.html).
 
 ## Hardware
 
