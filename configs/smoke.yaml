@@ -1,0 +1,64 @@
+seed: 20260824
+project_root: /home/tione/notebook/users/fhh/lapo_value_model
+data_root: /home/tione/notebook/users/fhh/datasets/jnogga
+artifact_root: /home/tione/notebook/users/fhh/lapo_value_model/artifacts/smoke
+output_root: /home/tione/notebook/users/fhh/lapo_value_model/outputs/smoke
+max_episodes_per_outcome: 32
+
+data:
+  camera_key: observation.images.left_external
+  fps: 15
+  history_offsets: [-10, -5, 0]
+  future_offset: 5
+  anchors_per_episode: 2
+  image_size: 336
+  jpeg_quality: 88
+  split_ratios: [0.8, 0.1, 0.1]
+  task_other_max_fraction: 1.0
+  tmax_quantile: 0.99
+  require_shared_station: true
+
+teacher:
+  image_size: 224
+  latent_dim: 32
+  beta_kl: 0.0001
+  kl_warmup_fraction: 0.1
+  learning_rate: 0.000525
+  weight_decay: 0.0001
+  epochs: 1
+  patience: 1
+  micro_batch_size: 2
+  grad_accum_steps: 1
+  num_workers: 2
+
+student:
+  model_id: Qwen/Qwen3-VL-2B-Instruct
+  model_source: /home/tione/notebook/users/fhh/lapo_value_model/models/Qwen3-VL-2B-Instruct
+  value_bins: 201
+  value_min: -1.0
+  value_max: 0.0
+  latent_dim: 32
+  lambda_latent: 0.1
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  adapter_learning_rate: 0.00005
+  head_learning_rate: 0.0005
+  weight_decay: 0.01
+  warmup_fraction: 0.03
+  epochs: 1
+  patience: 1
+  micro_batch_size: 1
+  grad_accum_steps: 1
+  num_workers: 1
+  max_text_length: 128
+  use_flash_attention: true
+  vision_attention_implementation: eager
+
+external_eval:
+  openpi:
+    data_root: /home/tione/notebook/users/fhh/datasets/openpi_rollout
+    artifact_root: /home/tione/notebook/users/fhh/lapo_value_model/artifacts/openpi_rollout-smoke
+    camera_key: observation.images.camera_1
+    anchors_per_episode: 2
+    bootstrap_samples: 100

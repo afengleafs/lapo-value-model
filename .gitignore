@@ -1,0 +1,74 @@
+# Local environments
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Extracted datasets, WebDataset shards, latents (~44GB)
+artifacts/
+
+# Training runs, checkpoints, exports, logs (~46GB)
+outputs/
+
+# Local backbone weights (~4GB). Download from HuggingFace/ModelScope.
+models/
+
+# Weight / data binaries (belt-and-suspenders)
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.tar
+*.tar.gz
+*.zip
+*.parquet
+*.arrow
+*.feather
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.avi
+
+# Runtime logs and TensorBoard
+*.log
+*.log.*
+logs/
+runs/
+tb/
+events.out.tfevents.*
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/

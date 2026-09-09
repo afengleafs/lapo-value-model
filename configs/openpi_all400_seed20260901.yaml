@@ -1,0 +1,83 @@
+seed: 20260901
+project_root: /home/tione/notebook/users/fhh/lapo_value_model
+data_root: /home/tione/notebook/users/fhh/datasets/jnogga
+artifact_root: /home/tione/notebook/users/fhh/lapo_value_model/artifacts/full
+output_root: /home/tione/notebook/users/fhh/lapo_value_model/outputs/full
+
+data:
+  camera_key: observation.images.left_external
+  fps: 15
+  history_offsets: [-10, -5, 0]
+  future_offset: 5
+  anchors_per_episode: 8
+  image_size: 336
+  jpeg_quality: 90
+  split_ratios: [0.8, 0.1, 0.1]
+  task_other_max_fraction: 0.15
+  tmax_quantile: 0.99
+  require_shared_station: true
+
+teacher:
+  image_size: 224
+  latent_dim: 32
+  beta_kl: 0.0001
+  kl_warmup_fraction: 0.1
+  learning_rate: 0.000525
+  weight_decay: 0.0001
+  epochs: 20
+  patience: 20
+  micro_batch_size: 112
+  grad_accum_steps: 1
+  num_workers: 8
+
+student:
+  model_id: Qwen/Qwen3-VL-2B-Instruct
+  model_source: /home/tione/notebook/users/fhh/lapo_value_model/models/Qwen3-VL-2B-Instruct
+  value_bins: 201
+  value_min: -1.0
+  value_max: 0.0
+  latent_dim: 32
+  lambda_latent: 0.1
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  adapter_learning_rate: 0.00005
+  head_learning_rate: 0.0005
+  weight_decay: 0.01
+  warmup_fraction: 0.03
+  epochs: 3
+  patience: 3
+  micro_batch_size: 160
+  validation_micro_batch_size: 80
+  grad_accum_steps: 1
+  num_workers: 6
+  max_text_length: 128
+  use_flash_attention: true
+  vision_attention_implementation: eager
+
+external_eval:
+  openpi:
+    data_root: /home/tione/notebook/users/fhh/datasets/openpi_rollout
+    artifact_root: /home/tione/notebook/users/fhh/lapo_value_model/artifacts/openpi_rollout
+    camera_key: observation.images.camera_1
+    anchors_per_episode: 8
+    bootstrap_samples: 2000
+    finetune:
+      artifact_name: finetune_all400_seed20260901
+      training_collections: [rollout, demonstration]
+      reuse_rollout_folds_from: /home/tione/notebook/users/fhh/lapo_value_model/artifacts/openpi_rollout/finetune/episodes.parquet
+      folds: 5
+      steps: 2000
+      save_every_steps: 1000
+      anchor_stride_source_frames: 10
+      advantage_horizon_model_frames: 50
+      adapter_learning_rate: 0.00001
+      head_learning_rate: 0.0001
+      warmup_steps: 100
+      lambda_latent: 0.1
+      bootstrap_samples: 2000
+      world_size_per_fold: 1
+      micro_batch_size: 16
+      evaluation_micro_batch_size: 80
+      grad_accum_steps: 1
+      num_workers: 6

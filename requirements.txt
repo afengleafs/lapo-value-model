@@ -1,0 +1,8 @@
+# Keep the platform-provided DTK/ROCm torch, torchvision, flash-attn and deepspeed.
+transformers==4.57.1
+peft==0.18.1
+accelerate==1.13.0
+webdataset==1.0.2
+qwen-vl-utils==0.0.14
+modelscope>=1.31,<2
+

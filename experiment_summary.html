@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LAPO + Qwen3-VL 价值模型实验总结</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --panel2: #f8fafc; --border: #e3e7ee;
+  --text: #1f2937; --muted: #6b7280; --accent: #2563eb; --good: #059669;
+  --bad: #dc2626; --b-color: #2563eb; --p-color: #ea580c; --l-color: #7c3aed;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Noto Sans SC", "PingFang SC", sans-serif;
+  line-height: 1.65; font-size: 15px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
+h1 { font-size: 26px; margin: 8px 0 4px; color: #111827; }
+h2 { font-size: 20px; margin: 40px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border); color: #111827; }
+h3 { font-size: 16px; margin: 24px 0 8px; color: var(--accent); }
+.sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; margin: 14px 0; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+.kpi { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.kpi .v { font-size: 24px; font-weight: 700; margin-top: 2px; color: #111827; }
+.kpi .k { font-size: 12px; color: var(--muted); }
+.kpi .d { font-size: 12px; margin-top: 2px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+td { font-variant-numeric: tabular-nums; }
+tr:hover td { background: #f1f5f9; }
+.hl { color: var(--accent); font-weight: 700; }
+.good { color: var(--good); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.muted { color: var(--muted); font-size: 12px; }
+.win-b { color: var(--b-color); font-weight: 700; }
+.win-p { color: var(--p-color); font-weight: 700; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px;
+  border: 1px solid #e2e8f0; background: #f1f5f9; color: #475569; margin-right: 6px; }
+.callout { border-left: 3px solid var(--accent); background: #eff6ff;
+  padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 13.5px; }
+.callout.warn { border-left-color: #ea580c; background: #fff7ed; }
+.chart { width: 100%; }
+svg text { font-family: inherit; }
+.legend { font-size: 12px; color: var(--muted); margin: 2px 0 10px; }
+.legend span { display: inline-block; margin-right: 14px; }
+.dot { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+ul { margin: 6px 0; padding-left: 20px; }
+li { margin: 3px 0; }
+code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: #334155; }
+.footer { margin-top: 48px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.arch { width: 100%; overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>LAPO + Qwen3-VL RECAP 价值模型 — 实验结果总结</h1>
+<div class="sub">项目：<code>lapo_value_model</code> ｜ 骨干 Qwen3-VL-2B + LoRA(rank 16) ｜ 201-bin 分布式价值头 ｜ 硬件：海光 BW1000_H（DCU, torch 2.7.1 / DTK）｜ 报告生成：2026-09-03 15:39</div>
+
+<h2>1. 我们提出的模型架构</h2>
+<div class="card">
+<div style="margin-bottom:10px">核心约束：<b>未来帧只允许进入训练期 Teacher，不能进入 Student 或最终部署模型。</b>部署时删除 LAPO Teacher 与 Latent 路径（旧 direct 架构），仅保留 Qwen3-VL LoRA 与 201-bin Value Head。</div>
+<div class="arch">
+<svg width="1160" height="440" viewBox="0 0 1160 440" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <!-- ===== Teacher zone ===== -->
+  <rect x="16" y="46" width="392" height="342" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="32" y="40" font-size="14" font-weight="700" fill="#b45309">训练期专用（不导出）：LAPO Teacher</text>
+
+  <rect x="36" y="80" width="130" height="46" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1.3"/>
+  <text x="101" y="99" font-size="12.5" text-anchor="middle" fill="#78350f">当前帧</text>
+  <text x="101" y="116" font-size="12.5" text-anchor="middle" fill="#78350f">o_t</text>
+
+  <rect x="36" y="150" width="130" height="46" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1.3"/>
+  <text x="101" y="169" font-size="12.5" text-anchor="middle" fill="#78350f">未来帧</text>
+  <text x="101" y="186" font-size="12.5" text-anchor="middle" fill="#78350f">o_t+5</text>
+
+  <rect x="216" y="106" width="140" height="52" rx="8" fill="#fde68a" stroke="#d97706" stroke-width="1.3"/>
+  <text x="286" y="127" font-size="12.5" text-anchor="middle" font-weight="600" fill="#78350f">ResNet-18 IDM</text>
+  <text x="286" y="144" font-size="11" text-anchor="middle" fill="#92400e">μ, logσ² ∈ R³²</text>
+
+  <rect x="216" y="196" width="140" height="52" rx="8" fill="#fde68a" stroke="#d97706" stroke-width="1.3"/>
+  <text x="286" y="217" font-size="12.5" text-anchor="middle" font-weight="600" fill="#78350f">z_t ∈ R³²</text>
+  <text x="286" y="234" font-size="11" text-anchor="middle" fill="#92400e">transition latent（采样）</text>
+
+  <rect x="36" y="300" width="150" height="52" rx="8" fill="#fde68a" stroke="#d97706" stroke-width="1.3"/>
+  <text x="111" y="321" font-size="12.5" text-anchor="middle" font-weight="600" fill="#78350f">FiLM U-Net FDM</text>
+  <text x="111" y="338" font-size="11" text-anchor="middle" fill="#92400e">以 z_t 与 o_t 为条件</text>
+
+  <rect x="216" y="300" width="140" height="52" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1.3"/>
+  <text x="286" y="321" font-size="12.5" text-anchor="middle" fill="#78350f">重建未来帧 ô_t+5</text>
+  <text x="286" y="338" font-size="11" text-anchor="middle" fill="#92400e">MSE / SSIM 重建损失</text>
+
+  <line x1="166" y1="103" x2="216" y2="122" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="166" y1="173" x2="216" y2="142" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="286" y1="158" x2="286" y2="196" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 216 232 C 150 250 120 270 112 300" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 101 126 C 90 200 95 260 104 300" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="186" y1="326" x2="216" y2="326" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ===== Huber align dashed arrow ===== -->
+  <path d="M 356 222 C 520 200 700 260 930 318" fill="none" stroke="#d97706" stroke-width="1.8" stroke-dasharray="7 5" marker-end="url(#arrAmber)"/>
+  <text x="620" y="262" font-size="12" text-anchor="middle" fill="#b45309" font-weight="600">Huber 对齐 ẑ ↔ z_t（λ = 0.1，仅训练期）</text>
+
+  <!-- ===== Student zone ===== -->
+  <rect x="452" y="46" width="692" height="342" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="468" y="40" font-size="14" font-weight="700" fill="#1d4ed8">Student ＝ 部署模型（仅三帧历史 + 任务语言，无未来信息）</text>
+
+  <rect x="472" y="80" width="180" height="50" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.3"/>
+  <text x="562" y="100" font-size="12.5" text-anchor="middle" fill="#1e3a8a">三帧历史</text>
+  <text x="562" y="118" font-size="12.5" text-anchor="middle" fill="#1e3a8a">[o_t−10, o_t−5, o_t]</text>
+
+  <rect x="472" y="152" width="180" height="46" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.3"/>
+  <text x="562" y="171" font-size="12.5" text-anchor="middle" fill="#1e3a8a">任务语言</text>
+  <text x="562" y="188" font-size="11" text-anchor="middle" fill="#3b82f6">success/failure 共享 coarse family</text>
+
+  <rect x="700" y="96" width="190" height="66" rx="8" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.3"/>
+  <text x="795" y="119" font-size="13" text-anchor="middle" font-weight="700" fill="#1e3a8a">Qwen3-VL-2B (bf16)</text>
+  <text x="795" y="137" font-size="11.5" text-anchor="middle" fill="#1d4ed8">LoRA r16 · 语言 + 视觉 attention</text>
+  <text x="795" y="154" font-size="11" text-anchor="middle" fill="#3b82f6">shared hidden h ∈ R²⁰⁴⁸</text>
+
+  <rect x="936" y="66" width="192" height="54" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.3"/>
+  <text x="1032" y="87" font-size="12.5" text-anchor="middle" font-weight="600" fill="#1e3a8a">Value Head</text>
+  <text x="1032" y="104" font-size="11.5" text-anchor="middle" fill="#3b82f6">2048 → 512 → 256 → 201</text>
+
+  <rect x="936" y="142" width="192" height="46" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="1032" y="162" font-size="12.5" text-anchor="middle" font-weight="700" fill="#1e3a8a">V̂ = Σ p_i · bin_i ∈ [−1, 0]</text>
+  <text x="1032" y="179" font-size="11" text-anchor="middle" fill="#3b82f6">越接近成功越接近 0</text>
+
+  <rect x="936" y="296" width="192" height="62" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="1032" y="315" font-size="12" text-anchor="middle" font-weight="600" fill="#92400e">Latent Head（仅训练）</text>
+  <text x="1032" y="331" font-size="11" text-anchor="middle" fill="#b45309">2048 → 512 → 128 → 32</text>
+  <text x="1032" y="347" font-size="11" text-anchor="middle" fill="#b45309">ẑ ∈ R³²，部署时删除</text>
+
+  <line x1="652" y1="105" x2="700" y2="120" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="652" y1="175" x2="700" y2="145" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="890" y1="112" x2="936" y2="97" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="1032" y1="120" x2="1032" y2="142" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 890 150 C 920 200 925 250 940 296" fill="none" stroke="#d97706" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrAmber)"/>
+
+  <!-- legend -->
+  <rect x="452" y="404" width="14" height="14" rx="3" fill="#eff6ff" stroke="#2563eb"/>
+  <text x="472" y="416" font-size="12" fill="#475569">部署保留</text>
+  <rect x="560" y="404" width="14" height="14" rx="3" fill="#fffbeb" stroke="#d97706" stroke-dasharray="3 2"/>
+  <text x="580" y="416" font-size="12" fill="#475569">仅训练期（部署删除）</text>
+  <text x="770" y="416" font-size="12" fill="#475569">Student loss = categorical CE + 0.1 × Huber(latent)</text>
+</svg>
+</div>
+</div>
+
+<h2>2. 总体结论（TL;DR）</h2>
+<div class="card">
+<ul>
+<li><b>DROID 域内：</b>LAPO latent 辅助监督<b>无收益</b> —— full baseline 验证 macro-Spearman <span class="good">0.4129</span> 明显优于 proposed <span class="bad">0.2976</span>；按预注册规则 baseline 被选中并导出为最终部署模型（<code>outputs/full/final</code>，96.1 MB）。</li>
+<li><b>OpenPI 迁移（302-rollout 严格 episode 级 OOF，预注册 step-2000 主结果）：</b>LAPO proposed 在 13 项指标中赢下 <span class="good">11 项</span>；mean-value AUC 0.8777 vs 0.8206（bootstrap 95% CI 不重叠），A50 advantage 噪声比 σ/scale 3.53 vs 4.04。<b>latent 监督对跨平台迁移有效。</b></li>
+<li><b>OpenPI all400（数据量加大）：</b>旧架构 proposed 仍以 10:3 胜过 direct baseline，但优势收窄。</li>
+<li><b>新 latent128 串联架构：</b>价值标定与 advantage 分离度大幅改善（MAE 0.2455 全场最优；A50 正率分离 succ 0.403 / fail 0.199），但轨迹内排序退化（macro-Spearman 0.695 vs 0.775）。注意官方 caveat：对比的是「完整架构+初始化方案」，不是架构本身的单一因果效应。</li>
+<li><b>工程：</b>单条 anchor 端到端推理约 108 ms（batch=1，约 9.2 anchors/s，峰值 8.26 GiB/卡），baseline 与 proposed 延迟基本相同。</li>
+</ul>
+</div>
+
+<h2>3. LAPO Teacher 训练（DROID，20 epochs / 37,460 steps）</h2>
+<div class="grid">
+  <div class="kpi"><div class="k">最终 val reconstruction gain（门禁 &gt; 0）</div><div class="v good">+0.001527</div><div class="d">epoch 19；最佳 epoch 18 = +0.001535</div></div>
+  <div class="kpi"><div class="k">最终 val MSE vs copy-MSE</div><div class="v">0.001248</div><div class="d">复制上一帧基线 0.002774，相对降低 55.0%</div></div>
+  <div class="kpi"><div class="k">最终 val SSIM</div><div class="v">0.9390</div><div class="d">epoch 0 仅 0.6438</div></div>
+</div>
+<div class="card">
+<div id="chart-teacher" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>reconstruction gain（左轴）</span><span><i class="dot" style="background:#ea580c"></i>SSIM（右轴）</span></div>
+</div>
+
+<h2>4. DROID Student：400-step 消融筛选（同预算，仅改 latent 监督模式）</h2>
+<div class="card">
+<table>
+<tr><th>实验组</th><th>MAE ↓</th><th>RMSE ↓</th><th>macro-Spearman ↑</th><th>成功/失败 AUC ↑</th><th>时间单调性 ↑</th><th>adv 符号准确率 ↑</th></tr>
+<tr><td><b>baseline</b><br><span class="muted">无 latent 监督</span></td>
+<td>0.3225</td><td>0.3931</td><td class="hl">0.1562</td>
+<td>0.7468</td><td>0.5266</td><td>0.5265</td></tr>
+<tr><td><b>proposed</b><br><span class="muted">真实 LAPO latent</span></td>
+<td>0.3388</td><td>0.4130</td><td class="hl">0.2196</td>
+<td>0.7325</td><td>0.5518</td><td>0.5516</td></tr>
+<tr><td><b>random 对照</b><br><span class="muted">随机 latent</span></td>
+<td>0.3241</td><td>0.3944</td><td class="hl">0.1698</td>
+<td>0.7200</td><td>0.5377</td><td>0.5377</td></tr>
+<tr><td><b>shuffled 对照</b><br><span class="muted">打乱配对的 latent</span></td>
+<td>0.3408</td><td>0.4164</td><td class="hl">0.1347</td>
+<td>0.7201</td><td>0.5237</td><td>0.5237</td></tr>
+
+</table>
+<div class="callout warn">400-step 筛选阶段 proposed 的 Spearman（0.2196）高于 baseline（0.1562），但 random latent（0.1698）也高于 baseline —— 小预算下收益不能干净地归因于真实 transition 监督，因此 screen 只作消融诊断，最终结论以完整训练为准。</div>
+</div>
+
+<h2>5. DROID Student：完整训练（3 epochs / 3,933 steps，验证集 53,772 anchors）</h2>
+<div class="card">
+<table>
+<tr><th>阶段</th><th>run</th><th>MAE ↓</th><th>RMSE ↓</th><th>macro-Spearman ↑</th><th>成功/失败 AUC ↑</th><th>时间单调性 ↑</th></tr>
+<tr><td rowspan="2">epoch 0 (step 1311)</td>
+<td>baseline</td><td>0.4049</td><td>0.5025</td><td class="hl">0.2056</td><td>0.7573</td><td>0.5462</td></tr>
+<tr><td>proposed</td><td>0.3766</td><td>0.4536</td><td class="hl">0.0953</td><td>0.7589</td><td>0.5216</td></tr>
+<tr><td rowspan="2">epoch 1 (step 2622)</td>
+<td>baseline</td><td>0.2736</td><td>0.3898</td><td class="hl">0.3496</td><td>0.8309</td><td>0.5695</td></tr>
+<tr><td>proposed</td><td>0.2846</td><td>0.3928</td><td class="hl">0.2930</td><td>0.8165</td><td>0.5601</td></tr>
+<tr><td rowspan="2">epoch 2 (step 3933)</td>
+<td>baseline</td><td>0.2393</td><td>0.3487</td><td class="hl">0.4129</td><td>0.8804</td><td>0.5887</td></tr>
+<tr><td>proposed</td><td>0.2594</td><td>0.3643</td><td class="hl">0.2976</td><td>0.8578</td><td>0.5617</td></tr>
+
+</table>
+<div class="callout">常数预测基线 constant-MAE = 0.2523。baseline 最终 MAE 0.2393（优于常数），proposed 0.2594（劣于常数）。按预注册选择规则（DROID 验证 macro-Spearman 高者胜，平局选 baseline），<b>baseline 当选并导出</b>；OpenPI 结果不参与选择。</div>
+<div id="chart-droid-sp" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline macro-Spearman</span><span><i class="dot" style="background:#ea580c"></i>proposed macro-Spearman</span></div>
+<div id="chart-droid-mae" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline MAE</span><span><i class="dot" style="background:#ea580c"></i>proposed MAE</span></div>
+</div>
+
+<h2>6. OpenPI 302-rollout 五折 OOF 迁移评估（预注册主实验）</h2>
+<div class="card">
+<div style="margin-bottom:8px">
+<span class="tag">5 折 episode 级分层拆分，每 episode 恰好 held-out 一次</span>
+<span class="tag">302 episodes（88 成功 / 214 失败），98 个 demonstration 完全排除</span>
+<span class="tag">14,855 anchors / 11,835 个 A50 advantage 窗口</span>
+<span class="tag">每折 2,000 steps，全局 batch 320</span>
+<span class="tag">2,000 次 outcome 分层 episode bootstrap 95% CI</span>
+<span class="tag">step 2000 为预注册主结果</span>
+</div>
+<h3>6.1 主结果（step 2000，proposed vs baseline，13 项指标 proposed 赢 11 项）</h3>
+<table>
+<tr><th>指标</th><th>baseline</th><th>proposed</th><th>Δ(proposed−baseline)</th><th>胜者</th></tr>
+<tr><td>MAE <span class="muted">(↓好)</span></td>
+<td>0.3404</td><td>0.3457</td>
+<td class="bad">+0.0053</td><td class="win-b">baseline</td></tr>
+<tr><td>RMSE <span class="muted">(↓好)</span></td>
+<td>0.3921</td><td>0.3853</td>
+<td class="good">-0.0068</td><td class="win-p">proposed</td></tr>
+<tr><td>Success macro-Spearman <span class="muted">(↑好)</span></td>
+<td>0.5731</td><td>0.6030</td>
+<td class="good">+0.0299</td><td class="win-p">proposed</td></tr>
+<tr><td>Temporal monotonicity <span class="muted">(↑好)</span></td>
+<td>0.5170</td><td>0.5275</td>
+<td class="good">+0.0105</td><td class="win-p">proposed</td></tr>
+<tr><td>First-anchor AUC <span class="muted">(↑好)</span></td>
+<td>0.5105</td><td>0.5537</td>
+<td class="good">+0.0432</td><td class="win-p">proposed</td></tr>
+<tr><td>Mean-value AUC <span class="muted">(↑好)</span></td>
+<td>0.8206</td><td>0.8777</td>
+<td class="good">+0.0571</td><td class="win-p">proposed</td></tr>
+<tr><td>Last-value AUC <span class="muted">(↑好)</span></td>
+<td>0.9256</td><td>0.9513</td>
+<td class="good">+0.0258</td><td class="win-p">proposed</td></tr>
+<tr><td>4-stage AUC <span class="muted">(↑好)</span></td>
+<td>0.6487</td><td>0.6476</td>
+<td class="bad">-0.0010</td><td class="win-b">baseline</td></tr>
+<tr><td>A50 sigma <span class="muted">(↓好)</span></td>
+<td>0.2255</td><td>0.1967</td>
+<td class="good">-0.0287</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 sigma/scale <span class="muted">(↓好)</span></td>
+<td>4.0422</td><td>3.5276</td>
+<td class="good">-0.5146</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 success positive rate <span class="muted">(↑好)</span></td>
+<td>0.3435</td><td>0.3457</td>
+<td class="good">+0.0021</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 failure positive rate <span class="muted">(↓好)</span></td>
+<td>0.2710</td><td>0.2696</td>
+<td class="good">-0.0014</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 failure tail20 positive rate <span class="muted">(↓好)</span></td>
+<td>0.4605</td><td>0.4079</td>
+<td class="good">-0.0526</td><td class="win-p">proposed</td></tr>
+
+</table>
+<h3>6.2 关键指标与 bootstrap 95% CI（step 2000）</h3>
+<table>
+<tr><th>指标</th><th>baseline（含 CI）</th><th>proposed（含 CI）</th><th>Δ</th></tr>
+<tr><td>Mean-value AUC</td><td>0.8206<br><span class="muted">[0.7678, 0.8713]</span></td>
+<td>0.8777<br><span class="muted">[0.8354, 0.9179]</span></td><td class="good">+0.0571</td></tr>
+<tr><td>Last-value AUC</td><td>0.9256<br><span class="muted">[0.8875, 0.9570]</span></td>
+<td>0.9513<br><span class="muted">[0.9255, 0.9727]</span></td><td class="good">+0.0258</td></tr>
+<tr><td>First-anchor AUC</td><td>0.5105<br><span class="muted">[0.4372, 0.5820]</span></td>
+<td>0.5537<br><span class="muted">[0.4840, 0.6248]</span></td><td class="good">+0.0432</td></tr>
+<tr><td>Success−Failure gap（均值）</td><td>0.1235<br><span class="muted">[0.0996, 0.1484]</span></td>
+<td>0.1161<br><span class="muted">[0.0972, 0.1368]</span></td><td class="bad">-0.0074</td></tr>
+<tr><td>Success−Failure gap（末值）</td><td>0.4333<br><span class="muted">[0.3865, 0.4774]</span></td>
+<td>0.4472<br><span class="muted">[0.4069, 0.4834]</span></td><td class="good">+0.0139</td></tr>
+<tr><td>A50 success positive rate</td><td>0.3435<br><span class="muted">[0.3253, 0.3617]</span></td>
+<td>0.3457<br><span class="muted">[0.3267, 0.3652]</span></td><td class="good">+0.0021</td></tr>
+<tr><td>A50 failure positive rate</td><td>0.2710<br><span class="muted">[0.2602, 0.2820]</span></td>
+<td>0.2696<br><span class="muted">[0.2587, 0.2805]</span></td><td class="good">-0.0014</td></tr>
+<tr><td>A50 failure tail20 positive rate</td><td>0.4605<br><span class="muted">[0.3214, 0.5962]</span></td>
+<td>0.4079<br><span class="muted">[0.2647, 0.5455]</span></td><td class="good">-0.0526</td></tr>
+
+</table>
+<div class="callout">mean-value AUC 的 95% CI 互不重叠（baseline [0.768, 0.871] vs proposed [0.835, 0.918]）；proposed 的 advantage 噪声（A50 σ/scale 3.53）显著低于 baseline（4.04），latent 监督产出的 advantage 信号更干净。</div>
+
+<h3>6.3 验证（held-out OOF）价值曲线 —— 归一化回合进度 vs 预测价值（step 2000）</h3>
+<div class="muted" style="margin-bottom:6px">每个 episode 内插值到 101 个进度点后做回合等权平均（不外推）；阴影为 ±1 SE（跨 episode）。左：88 个成功回合；右：214 个失败回合。</div>
+<div class="grid">
+<div>
+<div id="chart-vc-succ" class="chart"></div>
+<div class="legend"><b>成功回合</b> ｜ <span><i class="dot" style="background:#059669"></i>target（MC return）</span><span><i class="dot" style="background:#2563eb"></i>baseline</span><span><i class="dot" style="background:#ea580c"></i>proposed</span></div>
+</div>
+<div>
+<div id="chart-vc-fail" class="chart"></div>
+<div class="legend"><b>失败回合</b> ｜ <span><i class="dot" style="background:#6b7280"></i>target = −1</span><span><i class="dot" style="background:#2563eb"></i>baseline</span><span><i class="dot" style="background:#ea580c"></i>proposed</span></div>
+</div>
+</div>
+
+<h3>6.4 验证优势曲线 —— A50 transition advantage vs 回合进度（step 2000）</h3>
+<div class="muted" style="margin-bottom:6px">A50 = 50 model frames（100 source frames）前视窗口的 transition advantage；同样的回合等权平均，阴影 ±1 SE。</div>
+<div class="grid">
+<div>
+<div id="chart-ac-succ" class="chart"></div>
+<div class="legend"><b>成功回合</b> ｜ <span><i class="dot" style="background:#2563eb"></i>baseline</span><span><i class="dot" style="background:#ea580c"></i>proposed</span></div>
+</div>
+<div>
+<div id="chart-ac-fail" class="chart"></div>
+<div class="legend"><b>失败回合</b> ｜ <span><i class="dot" style="background:#2563eb"></i>baseline</span><span><i class="dot" style="background:#ea580c"></i>proposed</span></div>
+</div>
+</div>
+
+<h3>6.5 A50 advantage 分布（step 2000，密度直方图）</h3>
+<div class="grid">
+<div>
+<div id="chart-ad-succ" class="chart"></div>
+<div class="legend"><b>成功回合</b>（正率：baseline 0.344 / proposed 0.346）｜ <span><i class="dot" style="background:#2563eb"></i>baseline</span><span><i class="dot" style="background:#ea580c"></i>proposed</span></div>
+</div>
+<div>
+<div id="chart-ad-fail" class="chart"></div>
+<div class="legend"><b>失败回合</b>（正率：baseline 0.271 / proposed 0.270；尾部 20%：0.461 / 0.408）｜ <span><i class="dot" style="background:#2563eb"></i>baseline</span><span><i class="dot" style="background:#ea580c"></i>proposed</span></div>
+</div>
+</div>
+
+<h3>6.6 分阶段成功/失败区分度（container_transfer，stage-matched AUC）</h3>
+<table>
+<tr><th>阶段组</th><th>baseline</th><th>proposed</th><th>Δ</th></tr>
+<tr><td>container_transfer:stage-0</td><td>0.5195</td><td>0.5305</td><td class="good">+0.0110</td></tr>
+<tr><td>container_transfer:stage-1</td><td>0.5978</td><td>0.5874</td><td class="bad">-0.0104</td></tr>
+<tr><td>container_transfer:stage-2</td><td>0.6470</td><td>0.6413</td><td class="bad">-0.0057</td></tr>
+<tr><td>container_transfer:stage-3</td><td>0.8303</td><td>0.8313</td><td class="good">+0.0010</td></tr>
+
+</table>
+<h3>6.7 学习曲线（21 个 OOF 评估点）</h3>
+<div id="chart-r-aucmean" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline mean-value AUC</span><span><i class="dot" style="background:#ea580c"></i>proposed mean-value AUC</span></div>
+<div id="chart-r-auclast" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline last-value AUC</span><span><i class="dot" style="background:#ea580c"></i>proposed last-value AUC</span></div>
+<div id="chart-r-sp" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline success macro-Spearman</span><span><i class="dot" style="background:#ea580c"></i>proposed success macro-Spearman</span></div>
+<div id="chart-r-sigma" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline A50 σ/scale</span><span><i class="dot" style="background:#ea580c"></i>proposed A50 σ/scale</span></div>
+</div>
+
+<h2>7. OpenPI all400 五折实验（400 episodes，18,071 anchors，seed 20260901）</h2>
+<div class="card">
+<div class="callout warn">该协议把 98 个 demonstration 也纳入（共 400 episodes），每折仅保存/评估 step 0 / 1000 / 2000。Baseline 完整加载旧 DROID Value Head，latent128 proposed 迁移旧 LoRA/Latent Head 并重置新 Value Head —— <b>比较的是完整「架构+初始化」方案，不是架构本身的单一因果效应</b>（官方 comparison_caveat 原文）。</div>
+<h3>7.1 四组 run 在 step 2000 的指标全景（加粗高亮为当列最优）</h3>
+<table>
+<tr><th>指标</th><th>direct baseline<br>（首轮）</th><th>direct baseline<br>（rerun）</th><th>proposed<br>（latent32 直连）</th><th>proposed latent128<br>（新架构）</th></tr>
+<tr><td>MAE ↓</td><td class="">0.2560</td><td class="">0.2557</td><td class="">0.2613</td><td class="hl">0.2455</td></tr>
+<tr><td>RMSE ↓</td><td class="">0.3364</td><td class="hl">0.3338</td><td class="">0.3350</td><td class="">0.3420</td></tr>
+<tr><td>Success macro-Spearman ↑</td><td class="">0.7783</td><td class="">0.7746</td><td class="hl">0.7856</td><td class="">0.6954</td></tr>
+<tr><td>Temporal monotonicity ↑</td><td class="">0.5869</td><td class="">0.5906</td><td class="hl">0.5998</td><td class="">0.5802</td></tr>
+<tr><td>First-anchor AUC ↑</td><td class="">0.7834</td><td class="">0.7836</td><td class="hl">0.7971</td><td class="">0.7688</td></tr>
+<tr><td>Mean-value AUC ↑</td><td class="">0.9452</td><td class="">0.9519</td><td class="">0.9566</td><td class="hl">0.9658</td></tr>
+<tr><td>Last-value AUC ↑</td><td class="">0.9676</td><td class="">0.9695</td><td class="hl">0.9760</td><td class="">0.9718</td></tr>
+<tr><td>4-stage AUC ↑</td><td class="">0.7805</td><td class="hl">0.7849</td><td class="">0.7636</td><td class="">0.7570</td></tr>
+<tr><td>A50 σ/scale ↓</td><td class="">3.1735</td><td class="">3.0901</td><td class="hl">2.9232</td><td class="">3.2499</td></tr>
+<tr><td>A50 success pos-rate ↑</td><td class="">0.2955</td><td class="">0.2979</td><td class="">0.3121</td><td class="hl">0.4032</td></tr>
+<tr><td>A50 failure pos-rate ↓</td><td class="">0.3044</td><td class="">0.3020</td><td class="">0.2881</td><td class="hl">0.1986</td></tr>
+
+</table>
+<h3>7.2 配对比较 A：direct baseline（首轮） vs proposed latent32 —— proposed 10 : 3 胜</h3>
+<table>
+<tr><th>指标</th><th>baseline</th><th>proposed</th><th>Δ</th><th>胜者</th></tr>
+<tr><td>MAE <span class="muted">(↓好)</span></td>
+<td>0.2560</td><td>0.2613</td>
+<td class="bad">+0.0054</td><td class="win-b">baseline</td></tr>
+<tr><td>RMSE <span class="muted">(↓好)</span></td>
+<td>0.3364</td><td>0.3350</td>
+<td class="good">-0.0014</td><td class="win-p">proposed</td></tr>
+<tr><td>Success macro-Spearman <span class="muted">(↑好)</span></td>
+<td>0.7783</td><td>0.7856</td>
+<td class="good">+0.0073</td><td class="win-p">proposed</td></tr>
+<tr><td>Temporal monotonicity <span class="muted">(↑好)</span></td>
+<td>0.5869</td><td>0.5998</td>
+<td class="good">+0.0130</td><td class="win-p">proposed</td></tr>
+<tr><td>First-anchor AUC <span class="muted">(↑好)</span></td>
+<td>0.7834</td><td>0.7971</td>
+<td class="good">+0.0137</td><td class="win-p">proposed</td></tr>
+<tr><td>Mean-value AUC <span class="muted">(↑好)</span></td>
+<td>0.9452</td><td>0.9566</td>
+<td class="good">+0.0114</td><td class="win-p">proposed</td></tr>
+<tr><td>Last-value AUC <span class="muted">(↑好)</span></td>
+<td>0.9676</td><td>0.9760</td>
+<td class="good">+0.0084</td><td class="win-p">proposed</td></tr>
+<tr><td>4-stage AUC <span class="muted">(↑好)</span></td>
+<td>0.7805</td><td>0.7636</td>
+<td class="bad">-0.0169</td><td class="win-b">baseline</td></tr>
+<tr><td>A50 sigma <span class="muted">(↓好)</span></td>
+<td>0.1770</td><td>0.1630</td>
+<td class="good">-0.0140</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 sigma/scale <span class="muted">(↓好)</span></td>
+<td>3.1735</td><td>2.9232</td>
+<td class="good">-0.2503</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 success positive rate <span class="muted">(↑好)</span></td>
+<td>0.2955</td><td>0.3121</td>
+<td class="good">+0.0166</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 failure positive rate <span class="muted">(↓好)</span></td>
+<td>0.3044</td><td>0.2881</td>
+<td class="good">-0.0163</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 failure tail20 positive rate <span class="muted">(↓好)</span></td>
+<td>0.4079</td><td>0.4211</td>
+<td class="bad">+0.0132</td><td class="win-b">baseline</td></tr>
+
+</table>
+<h3>7.3 配对比较 B：direct baseline（rerun） vs proposed latent128 —— baseline 7 : 6 胜（互有胜负）</h3>
+<table>
+<tr><th>指标</th><th>baseline(rerun)</th><th>latent128</th><th>Δ</th><th>胜者</th></tr>
+<tr><td>MAE <span class="muted">(↓好)</span></td>
+<td>0.2557</td><td>0.2455</td>
+<td class="good">-0.0102</td><td class="win-p">proposed</td></tr>
+<tr><td>RMSE <span class="muted">(↓好)</span></td>
+<td>0.3338</td><td>0.3420</td>
+<td class="bad">+0.0081</td><td class="win-b">baseline</td></tr>
+<tr><td>Success macro-Spearman <span class="muted">(↑好)</span></td>
+<td>0.7746</td><td>0.6954</td>
+<td class="bad">-0.0792</td><td class="win-b">baseline</td></tr>
+<tr><td>Temporal monotonicity <span class="muted">(↑好)</span></td>
+<td>0.5906</td><td>0.5802</td>
+<td class="bad">-0.0104</td><td class="win-b">baseline</td></tr>
+<tr><td>First-anchor AUC <span class="muted">(↑好)</span></td>
+<td>0.7836</td><td>0.7688</td>
+<td class="bad">-0.0148</td><td class="win-b">baseline</td></tr>
+<tr><td>Mean-value AUC <span class="muted">(↑好)</span></td>
+<td>0.9519</td><td>0.9658</td>
+<td class="good">+0.0138</td><td class="win-p">proposed</td></tr>
+<tr><td>Last-value AUC <span class="muted">(↑好)</span></td>
+<td>0.9695</td><td>0.9718</td>
+<td class="good">+0.0023</td><td class="win-p">proposed</td></tr>
+<tr><td>4-stage AUC <span class="muted">(↑好)</span></td>
+<td>0.7849</td><td>0.7570</td>
+<td class="bad">-0.0278</td><td class="win-b">baseline</td></tr>
+<tr><td>A50 sigma <span class="muted">(↓好)</span></td>
+<td>0.1724</td><td>0.1813</td>
+<td class="bad">+0.0089</td><td class="win-b">baseline</td></tr>
+<tr><td>A50 sigma/scale <span class="muted">(↓好)</span></td>
+<td>3.0901</td><td>3.2499</td>
+<td class="bad">+0.1598</td><td class="win-b">baseline</td></tr>
+<tr><td>A50 success positive rate <span class="muted">(↑好)</span></td>
+<td>0.2979</td><td>0.4032</td>
+<td class="good">+0.1053</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 failure positive rate <span class="muted">(↓好)</span></td>
+<td>0.3020</td><td>0.1986</td>
+<td class="good">-0.1034</td><td class="win-p">proposed</td></tr>
+<tr><td>A50 failure tail20 positive rate <span class="muted">(↓好)</span></td>
+<td>0.4474</td><td>0.4342</td>
+<td class="good">-0.0132</td><td class="win-p">proposed</td></tr>
+
+</table>
+<div class="callout">
+<b>latent128 的特征性 trade-off：</b>MAE 0.2455（四组最优）、mean-value AUC 0.9658（四组最优），A50 正率分离度大幅拉开 —— success 正率 0.4032 vs failure 正率 0.1986（差 +0.2046）；而 direct baseline rerun 仅 0.2979 vs 0.3020（差 -0.0041）。代价是轨迹内排序：success macro-Spearman 从 0.7746 掉到 0.6954（−0.079），4-stage AUC 从 0.7849 掉到 0.7570。
+</div>
+<h3>7.4 all400 学习曲线（step 0 / 1000 / 2000）</h3>
+<div id="chart-a-aucmean" class="chart"></div>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>baseline 首轮</span><span><i class="dot" style="background:#60a5fa"></i>baseline rerun</span><span><i class="dot" style="background:#ea580c"></i>proposed latent32</span><span><i class="dot" style="background:#7c3aed"></i>proposed latent128</span> ｜ mean-value AUC</div>
+<div id="chart-a-sp" class="chart"></div>
+<div class="legend">同上 ｜ success macro-Spearman</div>
+<div id="chart-a-mae" class="chart"></div>
+<div class="legend">同上 ｜ MAE</div>
+</div>
+
+<h2>8. 过程指标（ProcVLM 口径，302-rollout，step 2000）与推理延迟</h2>
+<div class="card">
+<h3>8.1 EPR50 / MCC95</h3>
+<table>
+<tr><th>模型</th><th>EPR50 episode-macro（CI95）</th><th>EPR50 pooled</th><th>MCC95（episode 末帧）</th><th>MCC95（frame）</th></tr>
+<tr><td>baseline</td>
+<td>5.2257<br><span class="muted">[5.1107, 5.3342]</span></td>
+<td>14.13</td>
+<td>0.2023</td><td>0.1498</td></tr>
+<tr><td>proposed</td>
+<td>4.7889<br><span class="muted">[4.6827, 4.8962]</span></td>
+<td>13.83</td>
+<td>0.3230</td><td>0.2684</td></tr>
+
+</table>
+<div class="muted">MCC95 指阈值 0.95 下的 Matthews 相关系数：proposed 在 episode 末帧（0.323 vs 0.202）与 frame 级（0.268 vs 0.150）均更高，即高置信成功预测与真实结局的一致性更好。</div>
+<h3>8.2 端到端延迟（batch=1，暖缓存，含读 tar/JPEG + processor + H2D + forward + D2H）</h3>
+<table>
+<tr><th>模型</th><th>anchors/s</th><th>ms/anchor（均值）</th><th>峰值显存</th></tr>
+<tr><td>baseline</td><td>9.20</td>
+<td>108.7</td><td>8.26 GiB</td></tr>
+<tr><td>proposed</td><td>9.32</td>
+<td>107.3</td><td>8.26 GiB</td></tr>
+
+</table>
+<div class="muted">环境：BW1000_H，torch 2.7.1，transformers 4.57.1，python 3.11.9，bf16。</div>
+</div>
+
+<h2>9. 数据与训练配置备查</h2>
+<div class="card">
+<table>
+<tr><th>项目</th><th>配置</th></tr>
+<tr><td>DROID 数据</td><td>526,718 anchors；train/val/test = 419,344 / 53,772 / 53,602；唯一相机 <code>observation.images.left_external</code></td></tr>
+<tr><td>LAPO Teacher</td><td>ResNet-18 IDM + FiLM U-Net FDM，32D latent；AdamW lr 5.25e-4；micro-batch 112/卡 × 2 卡；20 epochs / 37,460 steps</td></tr>
+<tr><td>Student</td><td>Qwen3-VL-2B bf16 + LoRA r16；Value Head 2048→512→256→201（bin 期望）；Student loss = CE + 0.1×Huber(latent)；LoRA lr 5e-5、Head lr 5e-4；micro-batch 160/卡 × 2 卡，全局 320；3 epochs / 3,933 steps</td></tr>
+<tr><td>OpenPI OOF</td><td>三帧历史 [−20,−10,0]（30 Hz），teacher future +10；每折 2,000 steps，LoRA lr 1e-5、Head lr 1e-4，warmup 100 + cosine；success/failure 1:1 采样</td></tr>
+<tr><td>选择规则</td><td>最终 DROID 模型仅按 DROID 验证 macro-Spearman 在 full baseline / proposed 间选择（平局选 baseline）→ <b>选中 baseline 并导出</b>；OpenPI step 2000 为预注册主结果，禁止按 OpenPI 曲线择优</td></tr>
+<tr><td>硬件</td><td>海光 BW1000_H ×2（HIP_VISIBLE_DEVICES=6,7）；实测训练峰值约 40.53 GiB/卡</td></tr>
+</table>
+</div>
+
+<div class="footer">
+数据来源：<code>outputs/full/</code> 下各 run 的 <code>oof_report.json</code>、<code>oof_predictions/step-02000.parquet</code>、<code>oof_advantages/step-02000.parquet</code>、<code>metrics.jsonl</code>、<code>openpi_oof_model_comparison.json</code>、<code>final_selection.json</code>、<code>metrics_report.json</code>（ProcVLM）与 <code>latency_report.json</code>。OpenPI 结果为 OOF 微调评估口径，不能再称作 untouched external holdout。
+</div>
+
+</div>
+
+<script>
+const CURVES = {"rollout_baseline": {"steps": [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000], "mae": [0.5977275431581364, 0.3726725760796172, 0.36137071561915846, 0.36591738092339476, 0.36179486927085425, 0.35902001915603526, 0.354802800507385, 0.35527604784234446, 0.3455947754423565, 0.3490260653635522, 0.3485986389945242, 0.3546802825056183, 0.3503383023322335, 0.34488448188528104, 0.34110317693240366, 0.3365822837123995, 0.3420098323927691, 0.33927730619880037, 0.3421559806437216, 0.3410727568935344, 0.34037477364063096], "spearman": [0.14141033441089562, 0.7146355810067843, 0.7230954833573124, 0.639244344041047, 0.6951317041946116, 0.6459203360384783, 0.608704908405454, 0.6856411440055236, 0.6868828621666992, 0.6006535966481501, 0.5960467785194649, 0.670833258762431, 0.6513902760443209, 0.6306143928158721, 0.627996679157555, 0.5771105812781544, 0.6155634658101146, 0.572700765864957, 0.5763034818959034, 0.5741448994749896, 0.5730657739089903], "mono": [0.4965629522431259, 0.5314761215629522, 0.5354558610709117, 0.5327424023154848, 0.534370477568741, 0.533465991316932, 0.5244211287988423, 0.5314761215629522, 0.5312952243125905, 0.5240593342981187, 0.5215267727930536, 0.5267727930535456, 0.5227930535455861, 0.5242402315484804, 0.5233357452966715, 0.5285817655571635, 0.5253256150506512, 0.5195369030390738, 0.5218885672937771, 0.5227930535455861, 0.5170043415340086], "auc_mean": [0.4245433305012744, 0.7990654205607477, 0.8369265080713679, 0.8096325403568394, 0.800339847068819, 0.8463254035683943, 0.7840909090909092, 0.8127124044180118, 0.8379354290569243, 0.8158453695836874, 0.8078802039082413, 0.8217395921835174, 0.8362361937128292, 0.8241291418861512, 0.8250849617672047, 0.822536108751062, 0.8235450297366186, 0.8231202209005947, 0.8203058623619371, 0.8198810535259135, 0.820624468988955], "auc_last": [0.48614061172472384, 0.8095794392523364, 0.8399001699235344, 0.7999150382327952, 0.8605033984706882, 0.9079757858963468, 0.9200297366185217, 0.9264549702633814, 0.9245964316057774, 0.9069137638062872, 0.9087723024638913, 0.9331988105352592, 0.9283666100254886, 0.9205607476635514, 0.9343670348343246, 0.9244371282922684, 0.9328802039082412, 0.9304906542056075, 0.9295879354290569, 0.9288445199660152, 0.925552251486831], "auc_first": [0.4716971112999151, 0.502070943075616, 0.4936809685641461, 0.5160365335598981, 0.504035683942226, 0.5159303313508921, 0.538338997451147, 0.5113636363636364, 0.5133283772302464, 0.5195943075615973, 0.5315420560747665, 0.4969732370433305, 0.508177570093458, 0.5023895497026338, 0.5066376380628718, 0.5148152081563296, 0.5154524214103654, 0.5106733220050977, 0.514124893797791, 0.513965590484282, 0.5104609175870859], "auc4": [0.4639483970482149, 0.644317221376957, 0.6487808560853976, 0.6341940241569921, 0.6526020522416038, 0.6521564528942314, 0.6532826187535523, 0.6597263589340572, 0.6608819374810779, 0.6395526272557275, 0.6417543468395666, 0.6540052890653215, 0.6562812710070137, 0.6514211006533979, 0.6567412361013305, 0.6477953670009932, 0.6562870142305008, 0.649092244359041, 0.6480406084142967, 0.6472495999194885, 0.6486630991420836], "a50_sigma": [0.6557119360962784, 2.6978717583123255, 2.6167155092914007, 2.588188184164421, 2.4920324887333107, 2.7316131255603464, 2.7727973675896265, 2.96175573492021, 3.1960110246314133, 3.324307330137633, 3.3310544629932544, 3.633679811622146, 3.643346759791668, 3.8454970685657, 3.9934613943004797, 3.938640592699302, 3.9617874572401597, 4.008571767707095, 4.02877127648795, 4.038723625469152, 4.042172328874102], "a50_succ_pos": [0.28357263513513514, 0.30447635135135137, 0.32263513513513514, 0.3293918918918919, 0.32559121621621623, 0.34290540540540543, 0.34100506756756754, 0.33530405405405406, 0.34100506756756754, 0.3422719594594595, 0.34480574324324326, 0.33699324324324326, 0.33847128378378377, 0.33488175675675674, 0.34396114864864863, 0.34797297297297297, 0.34269425675675674, 0.3471283783783784, 0.34628378378378377, 0.34565033783783783, 0.34353885135135137], "a50_fail_pos": [0.3110297224961262, 0.2970840963515988, 0.2849697140442316, 0.28046203690660654, 0.2829976052965206, 0.2714466826313565, 0.27271446682631356, 0.2765178194111847, 0.27271446682631356, 0.27186927736300887, 0.2701788984363995, 0.2753909001267784, 0.27440484575292295, 0.2767995492322862, 0.27074235807860264, 0.2680659247781378, 0.27158754754190734, 0.2686293844203409, 0.269192844062544, 0.26961543879419636, 0.27102408789970417]}, "rollout_proposed": {"steps": [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000], "mae": [0.5057653144133609, 0.36790520603642557, 0.35581049098010475, 0.36581254655414885, 0.36490034619565054, 0.36072591936540216, 0.3504649113931066, 0.3603243736112005, 0.3470452613208921, 0.35142753061854964, 0.3555477626617851, 0.3552854366767597, 0.35092653255685724, 0.3464492195428451, 0.348465620700227, 0.34705515085120064, 0.34146829192064676, 0.3452298924733547, 0.3460961960166504, 0.34490913970705617, 0.34568561660039915], "spearman": [-0.3647821265067265, 0.7179455668773606, 0.6066413447060665, 0.6779122220393787, 0.6808721861279058, 0.5807072544830052, 0.6276546794148584, 0.7012989259786118, 0.7050712249230884, 0.5848316917597894, 0.6180963515008242, 0.635216509206833, 0.6401133436882632, 0.5977491829821795, 0.6528550131769314, 0.6328377190902185, 0.6263043581867197, 0.5841130267366418, 0.5784683238820945, 0.5972062243937707, 0.6029703433350364], "mono": [0.4913169319826339, 0.5446816208393632, 0.5260492040520984, 0.5452243125904487, 0.5533646888567294, 0.539616497829233, 0.5434153400868307, 0.5390738060781476, 0.5318379160636758, 0.5293053545586107, 0.5260492040520984, 0.5289435600578871, 0.5247829232995659, 0.5365412445730825, 0.5401591895803184, 0.5345513748191028, 0.5321997105643994, 0.5256874095513748, 0.5294862518089725, 0.5265918958031838, 0.5274963820549927], "auc_mean": [0.23396346644010194, 0.8328377230246389, 0.8263593882752761, 0.790409940526763, 0.8500955819881054, 0.8977803738317758, 0.8343245539507221, 0.8737255734919287, 0.891195836873407, 0.838838147833475, 0.8712298215802888, 0.8722387425658454, 0.8755841121495328, 0.8707519116397621, 0.8734600679694138, 0.8804694137638063, 0.8874256584536959, 0.8765399320305862, 0.8740441801189465, 0.8760089209855565, 0.8777081563296516], "auc_last": [0.4560853865760408, 0.8495645709430757, 0.8414401019541207, 0.8587510620220902, 0.8582200509770602, 0.9221006796941377, 0.9262425658453696, 0.9117459643160578, 0.94142948173322, 0.9405798640611726, 0.9333050127442651, 0.9416418861512319, 0.93946474086661, 0.9441376380628718, 0.9462616822429907, 0.9440845369583688, 0.9462616822429907, 0.9453058623619371, 0.9489167374681394, 0.9493946474086661, 0.9513062871707731], "auc_first": [0.46856414613423963, 0.5259133389974511, 0.4984600679694138, 0.5123194562446899, 0.5217183517417162, 0.5148683092608327, 0.49861937128292266, 0.536374256584537, 0.5078589634664402, 0.5135407816482582, 0.5312234494477486, 0.5087616822429907, 0.5342502124044181, 0.5274001699235344, 0.5394010195412063, 0.5300021240441801, 0.5459855564995753, 0.5420029736618521, 0.5492247238742566, 0.5367459643160578, 0.5536852166525064], "auc4": [0.4147236940038771, 0.6596330165782905, 0.6367959085959147, 0.6458405963048244, 0.6324649964091077, 0.6327499804412176, 0.6459866113579177, 0.6591428008725309, 0.6611744875064358, 0.6436956716622335, 0.6379631660127842, 0.6448751168633939, 0.6511582995678304, 0.6499373823923642, 0.6545604428530278, 0.6489725572177497, 0.6529480300841504, 0.644869316101865, 0.6446657704510728, 0.6474495202408217, 0.6476253765715965], "a50_sigma": [2.1778024970471264, 2.708431630870753, 2.819597708887412, 2.2957893418411937, 2.437678426722834, 2.593146151555931, 2.4336818195040073, 2.5466851730831355, 2.7627543235712264, 2.9938871646283562, 2.914638422900858, 3.1601739886241873, 3.270661603547233, 3.3696087474640435, 3.3802148279295996, 3.3932094794492995, 3.468385752271886, 3.541675955608863, 3.5345339898603743, 3.525407256056029, 3.5275662510676766], "a50_succ_pos": [0.30553209459459457, 0.31186655405405406, 0.3277027027027027, 0.33340371621621623, 0.3325591216216216, 0.34100506756756754, 0.34755067567567566, 0.33065878378378377, 0.34016047297297297, 0.3454391891891892, 0.33952702702702703, 0.33952702702702703, 0.3452280405405405, 0.33783783783783783, 0.34269425675675674, 0.3454391891891892, 0.3433277027027027, 0.3458614864864865, 0.3486064189189189, 0.3481841216216216, 0.34565033783783783], "a50_fail_pos": [0.2963797717988449, 0.29215382448232147, 0.2815889561910128, 0.2777856036061417, 0.27834906324834485, 0.27271446682631356, 0.2683476545992393, 0.2796168474433019, 0.2732779264685167, 0.2697563037047471, 0.273700521200169, 0.273700521200169, 0.26989716861529794, 0.2748274404845753, 0.27158754754190734, 0.2697563037047471, 0.271164952810255, 0.2694745738836456, 0.26764333004648544, 0.26792505986758697, 0.26961543879419636]}, "a400_baseline": {"steps": [0, 1000, 2000], "mae": [0.49956134575061234, 0.26427752638469576, 0.2559958029610216], "spearman": [0.2262716508785558, 0.7757736072487482, 0.778277889939495], "mono": [0.5020818875780708, 0.58558871154291, 0.5868609761739533], "auc_mean": [0.6081800824037785, 0.9159129735704954, 0.945206511908351], "auc_last": [0.4225705959200081, 0.9587729876394331, 0.9675660737614309], "auc_first": [0.3648377047532911, 0.7829866345090946, 0.7833886041603859], "auc4": [0.5174373762638923, 0.7681683800970788, 0.7804843466599817], "a50_sigma": [0.6522824851736017, 2.7277150605263802, 3.173543692481234], "a50_succ_pos": [0.2997705106138841, 0.306368330464716, 0.29546758462421113], "a50_fail_pos": [0.300183124383716, 0.29370333849838004, 0.30440907170023945]}, "a400_baseline_rerun": {"steps": [0, 1000, 2000], "mae": [0.4995707577249676, 0.26365971189299253, 0.2556736476102664], "spearman": [0.22674023808500296, 0.7768568194460893, 0.7745884773476482], "mono": [0.5030071709461023, 0.5898681471200555, 0.5905621096460791], "auc_mean": [0.607979097578133, 0.9245301979700533, 0.9519395035674806], "auc_last": [0.4225454728168023, 0.9669128730780826, 0.9695256758114763], "auc_first": [0.36368204200582854, 0.787508793086122, 0.783639835192443], "auc4": [0.5174098123186011, 0.7690947505945404, 0.7848765914048321], "a50_sigma": [0.6522243401258796, 2.6621519204281983, 3.0901420464724465], "a50_succ_pos": [0.29934021801491684, 0.3085197934595525, 0.2979059093516925], "a50_fail_pos": [0.3006057191153684, 0.2915903648401183, 0.3020143682208762]}, "a400_proposed": {"steps": [0, 1000, 2000], "mae": [0.44428206852664925, 0.26694525348433745, 0.26134650564076367], "spearman": [-0.45158484125519643, 0.7487723084772527, 0.7855802284524822], "mono": [0.49201943095072864, 0.5896368262780477, 0.5998149433263937], "auc_mean": [0.5771028037383178, 0.9315395437644457, 0.956562154557331], "auc_last": [0.5473821726459652, 0.9583207717817304, 0.9759823133353432], "auc_first": [0.6141845040699427, 0.7812531403879008, 0.7970555723042911], "auc4": [0.5014613114700432, 0.7468892754003722, 0.7635721525819053], "a50_sigma": [2.1295757372971797, 2.5615706717572695, 2.9232132077138013], "a50_succ_pos": [0.28284566838783703, 0.32372346528973034, 0.31210556511761334], "a50_fail_pos": [0.31680518382870826, 0.27665868432173546, 0.2880687420763488]}, "a400_latent128": {"steps": [0, 1000, 2000], "mae": [0.42135776120608126, 0.2466498819788757, 0.24549250169454043], "spearman": [-0.3740350725585005, 0.6801272857019958, 0.6954182370023644], "mono": [0.4773305574832292, 0.5659264399722415, 0.5801526717557252], "auc_mean": [0.3098934780424078, 0.9617626369209125, 0.9657572103306201], "auc_last": [0.31858607175158277, 0.9698522761531504, 0.9718118782031957], "auc_first": [0.40170585870766756, 0.7640689377951966, 0.7687920811978693], "auc4": [0.415885252364101, 0.7537762026896925, 0.7570443927957021], "a50_sigma": [0.010259658926812814, 3.141143941902195, 3.2499372976465466], "a50_succ_pos": [0.28270223752151463, 0.40949512335054505, 0.403184165232358], "a50_fail_pos": [0.316946048739259, 0.19242146781236794, 0.19861952387660234]}};
+const TEACHER = {"epochs": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], "gain": [-0.0002546058333654927, 0.00025515836334671005, -0.00020868445329145276, 0.0005603997302911371, 0.0006548265274844236, 0.0008241318637971307, 0.0007917403035768793, 0.0009584656447315387, 0.0010594867353953328, 0.0010968568164016715, 0.0011905423282729591, 0.001225192615304884, 0.0013776285229622762, 0.0014118301035068506, 0.001477542991418975, 0.0014944177666100136, 0.001517878934303732, 0.0015311257455786801, 0.001534857107314724, 0.001526526126710204], "ssim": [0.6437511933036149, 0.8348926063627005, 0.8491359706968069, 0.8784298468381166, 0.9013896053656936, 0.910963686183095, 0.8991939211264253, 0.9175908789038658, 0.9192714327946305, 0.9248153418302536, 0.9283029939979315, 0.9227138124406338, 0.9331318642944098, 0.9344110246747732, 0.9358947826549411, 0.9377882480621338, 0.9382339138537645, 0.9378896178677678, 0.9391322452574968, 0.9389644889160991]};
+const DROID = {"steps": [1311, 2622, 3933], "b_spearman": [0.20562539796659782, 0.3496004905968568, 0.41287039536200937], "p_spearman": [0.09532530999531244, 0.2929904283290801, 0.29758183531018484], "b_mae": [0.4049448681631205, 0.2735827460798563, 0.2393428319611903], "p_mae": [0.3766313424731663, 0.28458287082770634, 0.2594149826096252]};
+const VC = {"grid": [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28, 0.29, 0.3, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36, 0.37, 0.38, 0.39, 0.4, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46, 0.47, 0.48, 0.49, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7, 0.71, 0.72, 0.73, 0.74, 0.75, 0.76, 0.77, 0.78, 0.79, 0.8, 0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89, 0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 1.0], "b_success_mean": [null, null, -0.69087, -0.69733, -0.6976, -0.69655, -0.69878, -0.69633, -0.7008, -0.70918, -0.71421, -0.71747, -0.72917, -0.7366, -0.73238, -0.72979, -0.72696, -0.71954, -0.71822, -0.71799, -0.71817, -0.71341, -0.71211, -0.71236, -0.71088, -0.71518, -0.70477, -0.69505, -0.6837, -0.68471, -0.67998, -0.6816, -0.65116, -0.65364, -0.65067, -0.65332, -0.65464, -0.64236, -0.62998, -0.6164, -0.62023, -0.62128, -0.62828, -0.61335, -0.61192, -0.60783, -0.60421, -0.60549, -0.59447, -0.59261, -0.59456, -0.58646, -0.57862, -0.58167, -0.58415, -0.59109, -0.60021, -0.60181, -0.59652, -0.58954, -0.58357, -0.56526, -0.55082, -0.54286, -0.53508, -0.53107, -0.53796, -0.53966, -0.53287, -0.52886, -0.51819, -0.51635, -0.5125, -0.5072, -0.50247, -0.49076, -0.48665, -0.47553, -0.46614, -0.45071, -0.43408, -0.41761, -0.40056, -0.37998, -0.34263, -0.31766, -0.29038, -0.27067, -0.24749, -0.22376, -0.19996, -0.18564, -0.17461, -0.16173, -0.14936, -0.14328, -0.14132, -0.13191, -0.12942, -0.0954, null], "b_success_lo": [null, null, -0.71385, -0.71653, -0.70878, -0.70644, -0.70837, -0.70674, -0.71088, -0.71921, -0.72442, -0.72826, -0.74009, -0.74702, -0.74367, -0.74055, -0.73652, -0.72962, -0.72858, -0.72876, -0.72884, -0.72477, -0.72443, -0.72473, -0.72322, -0.72787, -0.71864, -0.70939, -0.69868, -0.70061, -0.69642, -0.69691, -0.66771, -0.67001, -0.6669, -0.66863, -0.67052, -0.66039, -0.6494, -0.63785, -0.64174, -0.64222, -0.64846, -0.63499, -0.63372, -0.62959, -0.62614, -0.62724, -0.61644, -0.61498, -0.616, -0.60838, -0.60093, -0.60427, -0.606, -0.6131, -0.6221, -0.62415, -0.61975, -0.61285, -0.60649, -0.58861, -0.57354, -0.56492, -0.55694, -0.55368, -0.562, -0.56327, -0.55597, -0.55153, -0.54145, -0.53965, -0.53573, -0.53108, -0.5268, -0.51568, -0.51071, -0.50075, -0.49187, -0.47689, -0.46011, -0.44382, -0.42641, -0.40508, -0.36655, -0.34143, -0.31307, -0.29358, -0.26852, -0.2427, -0.21814, -0.20428, -0.1924, -0.17765, -0.16363, -0.15709, -0.1554, -0.14566, -0.14635, -0.10662, null], "b_success_hi": [null, null, -0.66789, -0.67813, -0.68642, -0.68666, -0.68919, -0.68592, -0.69072, -0.69915, -0.704, -0.70668, -0.71825, -0.72618, -0.72109, -0.71903, -0.7174, -0.70946, -0.70786, -0.70722, -0.7075, -0.70205, -0.69979, -0.69999, -0.69854, -0.70249, -0.6909, -0.68071, -0.66872, -0.66881, -0.66354, -0.66629, -0.63461, -0.63727, -0.63444, -0.63801, -0.63876, -0.62433, -0.61056, -0.59495, -0.59872, -0.60034, -0.6081, -0.59171, -0.59012, -0.58607, -0.58228, -0.58374, -0.5725, -0.57024, -0.57312, -0.56454, -0.55631, -0.55907, -0.5623, -0.56908, -0.57832, -0.57947, -0.57329, -0.56623, -0.56065, -0.54191, -0.5281, -0.5208, -0.51322, -0.50846, -0.51392, -0.51605, -0.50977, -0.50619, -0.49493, -0.49305, -0.48927, -0.48332, -0.47814, -0.46584, -0.46259, -0.45031, -0.44041, -0.42453, -0.40805, -0.3914, -0.37471, -0.35488, -0.31871, -0.29389, -0.26769, -0.24776, -0.22646, -0.20482, -0.18178, -0.167, -0.15682, -0.14581, -0.13509, -0.12947, -0.12724, -0.11816, -0.11249, -0.08418, null], "b_success_n": 88, "b_failure_mean": [null, null, null, -0.64481, -0.67384, -0.69792, -0.70689, -0.71058, -0.71229, -0.71481, -0.71582, -0.71673, -0.7175, -0.71689, -0.71459, -0.71437, -0.71609, -0.71988, -0.72621, -0.73257, -0.73404, -0.73414, -0.73831, -0.7414, -0.73766, -0.73221, -0.72685, -0.72068, -0.71948, -0.72235, -0.7243, -0.72106, -0.71379, -0.70609, -0.70151, -0.70053, -0.69825, -0.69561, -0.69425, -0.69426, -0.69325, -0.69172, -0.69385, -0.69623, -0.69278, -0.68708, -0.68451, -0.68093, -0.676, -0.67284, -0.67566, -0.67426, -0.67001, -0.66635, -0.66416, -0.66355, -0.66109, -0.6662, -0.67059, -0.66766, -0.66294, -0.66081, -0.66254, -0.66207, -0.65648, -0.64813, -0.64479, -0.64378, -0.64669, -0.65059, -0.65229, -0.65205, -0.64154, -0.63494, -0.64207, -0.65036, -0.65062, -0.64887, -0.6474, -0.64434, -0.64772, -0.65162, -0.64838, -0.64379, -0.63429, -0.62712, -0.62774, -0.62713, -0.61771, -0.61558, -0.61842, -0.61933, -0.61658, -0.60199, -0.58762, -0.56858, -0.55101, -0.50354, -0.47273, null, null], "b_failure_lo": [null, null, null, -0.67761, -0.68464, -0.70535, -0.71362, -0.71718, -0.71884, -0.72146, -0.72277, -0.72388, -0.72481, -0.72407, -0.72187, -0.7216, -0.72339, -0.7272, -0.7338, -0.74014, -0.74158, -0.74157, -0.74578, -0.74875, -0.74513, -0.74011, -0.73489, -0.72898, -0.72781, -0.73098, -0.73349, -0.73031, -0.72324, -0.71586, -0.71147, -0.71043, -0.70835, -0.70602, -0.70479, -0.70497, -0.70407, -0.70297, -0.70511, -0.70732, -0.70437, -0.69925, -0.69671, -0.69277, -0.68759, -0.68424, -0.68704, -0.68581, -0.68162, -0.67777, -0.6758, -0.67537, -0.67291, -0.67807, -0.68245, -0.6794, -0.67478, -0.67259, -0.67405, -0.67343, -0.66799, -0.65955, -0.65663, -0.65612, -0.65893, -0.66262, -0.66412, -0.66384, -0.65373, -0.64752, -0.65444, -0.66269, -0.66319, -0.66174, -0.66031, -0.65736, -0.66082, -0.66446, -0.66141, -0.65731, -0.64815, -0.6409, -0.64151, -0.64131, -0.63273, -0.63117, -0.6341, -0.6354, -0.63286, -0.61846, -0.60446, -0.58596, -0.56919, -0.52888, -0.52963, null, null], "b_failure_hi": [null, null, null, -0.61201, -0.66304, -0.69049, -0.70016, -0.70398, -0.70574, -0.70816, -0.70887, -0.70958, -0.71019, -0.70971, -0.70731, -0.70714, -0.70879, -0.71256, -0.71862, -0.725, -0.7265, -0.72671, -0.73084, -0.73405, -0.73019, -0.72431, -0.71881, -0.71238, -0.71115, -0.71372, -0.71511, -0.71181, -0.70434, -0.69632, -0.69155, -0.69063, -0.68815, -0.6852, -0.68371, -0.68355, -0.68243, -0.68047, -0.68259, -0.68514, -0.68119, -0.67491, -0.67231, -0.66909, -0.66441, -0.66144, -0.66428, -0.66271, -0.6584, -0.65493, -0.65252, -0.65173, -0.64927, -0.65433, -0.65873, -0.65592, -0.6511, -0.64903, -0.65103, -0.65071, -0.64497, -0.63671, -0.63295, -0.63144, -0.63445, -0.63856, -0.64046, -0.64026, -0.62935, -0.62236, -0.6297, -0.63803, -0.63805, -0.636, -0.63449, -0.63132, -0.63462, -0.63878, -0.63535, -0.63027, -0.62043, -0.61334, -0.61397, -0.61295, -0.60269, -0.59999, -0.60274, -0.60326, -0.6003, -0.58552, -0.57078, -0.5512, -0.53283, -0.4782, -0.41583, null, null], "b_failure_n": 214, "p_success_mean": [null, null, -0.67795, -0.6795, -0.67558, -0.68478, -0.68542, -0.68588, -0.69872, -0.70457, -0.70975, -0.71059, -0.70805, -0.70812, -0.70428, -0.70318, -0.70837, -0.70843, -0.70989, -0.71391, -0.7119, -0.70484, -0.70755, -0.70433, -0.70279, -0.70031, -0.69923, -0.69756, -0.69062, -0.68518, -0.68744, -0.69196, -0.68852, -0.68006, -0.66818, -0.65181, -0.64205, -0.62829, -0.6221, -0.61624, -0.62229, -0.6178, -0.61249, -0.60031, -0.59753, -0.59873, -0.58604, -0.57673, -0.57724, -0.57633, -0.57363, -0.57557, -0.56769, -0.55627, -0.55643, -0.55983, -0.57039, -0.5757, -0.57737, -0.57389, -0.56835, -0.5618, -0.55863, -0.55965, -0.55058, -0.54627, -0.55085, -0.55621, -0.55175, -0.5462, -0.54148, -0.53872, -0.52481, -0.51263, -0.50428, -0.49235, -0.46896, -0.45571, -0.44638, -0.44146, -0.41536, -0.39515, -0.37017, -0.3413, -0.32247, -0.30252, -0.27361, -0.24188, -0.2198, -0.19634, -0.17674, -0.1623, -0.14684, -0.13971, -0.13264, -0.12359, -0.11939, -0.11412, -0.12457, -0.13923, null], "p_success_lo": [null, null, -0.69996, -0.692, -0.6833, -0.69215, -0.69257, -0.69358, -0.70681, -0.71252, -0.71781, -0.71886, -0.71591, -0.71548, -0.71138, -0.71115, -0.7169, -0.7167, -0.7178, -0.72158, -0.71984, -0.71336, -0.71592, -0.71297, -0.71095, -0.70879, -0.70826, -0.70698, -0.70105, -0.69605, -0.69743, -0.70232, -0.69937, -0.69153, -0.68013, -0.66465, -0.65548, -0.64294, -0.63719, -0.63229, -0.6387, -0.63504, -0.62833, -0.61668, -0.61419, -0.61561, -0.60289, -0.59435, -0.5964, -0.59557, -0.59266, -0.59413, -0.58527, -0.57444, -0.5751, -0.57888, -0.58927, -0.59488, -0.5968, -0.59313, -0.58855, -0.58224, -0.5798, -0.58059, -0.57168, -0.56813, -0.57335, -0.57831, -0.57368, -0.56814, -0.56357, -0.55995, -0.54586, -0.53403, -0.52586, -0.51473, -0.4923, -0.48075, -0.47277, -0.46736, -0.44161, -0.42148, -0.39645, -0.36765, -0.34884, -0.3284, -0.29738, -0.26456, -0.24081, -0.21447, -0.19415, -0.1802, -0.1638, -0.1562, -0.14842, -0.1378, -0.13361, -0.129, -0.14456, -0.17867, null], "p_success_hi": [null, null, -0.65594, -0.667, -0.66786, -0.67741, -0.67827, -0.67818, -0.69063, -0.69662, -0.70169, -0.70232, -0.70019, -0.70076, -0.69718, -0.69521, -0.69984, -0.70016, -0.70198, -0.70624, -0.70396, -0.69632, -0.69918, -0.69569, -0.69463, -0.69183, -0.6902, -0.68814, -0.68019, -0.67431, -0.67745, -0.6816, -0.67767, -0.66859, -0.65623, -0.63897, -0.62862, -0.61364, -0.60701, -0.60019, -0.60588, -0.60056, -0.59665, -0.58394, -0.58087, -0.58185, -0.56919, -0.55911, -0.55808, -0.55709, -0.5546, -0.55701, -0.55011, -0.5381, -0.53776, -0.54078, -0.55151, -0.55652, -0.55794, -0.55465, -0.54815, -0.54136, -0.53746, -0.53871, -0.52948, -0.52441, -0.52835, -0.53411, -0.52982, -0.52426, -0.51939, -0.51749, -0.50376, -0.49123, -0.4827, -0.46997, -0.44562, -0.43067, -0.41999, -0.41556, -0.38911, -0.36882, -0.34389, -0.31495, -0.2961, -0.27664, -0.24984, -0.2192, -0.19879, -0.17821, -0.15933, -0.1444, -0.12988, -0.12322, -0.11686, -0.10938, -0.10517, -0.09924, -0.10458, -0.09979, null], "p_success_n": 88, "p_failure_mean": [null, null, null, -0.68347, -0.67438, -0.68765, -0.69547, -0.70138, -0.70516, -0.70793, -0.70937, -0.7089, -0.70749, -0.70926, -0.71307, -0.71585, -0.71511, -0.71416, -0.71347, -0.71203, -0.71317, -0.71572, -0.71688, -0.71447, -0.71103, -0.70927, -0.70967, -0.70885, -0.70519, -0.70354, -0.70276, -0.70066, -0.6976, -0.69312, -0.69126, -0.69045, -0.68985, -0.68686, -0.68196, -0.67862, -0.6765, -0.67418, -0.67403, -0.67223, -0.66837, -0.66776, -0.6687, -0.66518, -0.66179, -0.6616, -0.66089, -0.65725, -0.65448, -0.65343, -0.65231, -0.6491, -0.6484, -0.64927, -0.64966, -0.65205, -0.64963, -0.6463, -0.64653, -0.64641, -0.64327, -0.641, -0.63883, -0.63513, -0.63673, -0.63366, -0.63173, -0.63184, -0.63206, -0.63092, -0.63128, -0.62831, -0.62424, -0.62416, -0.62074, -0.61744, -0.61959, -0.6242, -0.62371, -0.62005, -0.62084, -0.61909, -0.60955, -0.60381, -0.59834, -0.59071, -0.57937, -0.57074, -0.56601, -0.55902, -0.55562, -0.54353, -0.51796, -0.48886, -0.53034, null, null], "p_failure_lo": [null, null, null, -0.70455, -0.68183, -0.69274, -0.70015, -0.70587, -0.70951, -0.71232, -0.7139, -0.71342, -0.71203, -0.71375, -0.71763, -0.72039, -0.71977, -0.71899, -0.71844, -0.71703, -0.71835, -0.72092, -0.7223, -0.72012, -0.71666, -0.71492, -0.71564, -0.7151, -0.71159, -0.71013, -0.70944, -0.70731, -0.7045, -0.70014, -0.69836, -0.69761, -0.6971, -0.69409, -0.68921, -0.68595, -0.68392, -0.68166, -0.6816, -0.67991, -0.67652, -0.6762, -0.67727, -0.67377, -0.67043, -0.67031, -0.66972, -0.66603, -0.66298, -0.66183, -0.66085, -0.65775, -0.65694, -0.65758, -0.65782, -0.66015, -0.65799, -0.65444, -0.65463, -0.65438, -0.65129, -0.64888, -0.64684, -0.6435, -0.6455, -0.64269, -0.64086, -0.641, -0.64134, -0.64051, -0.64084, -0.6379, -0.63411, -0.63399, -0.63081, -0.62817, -0.63075, -0.63525, -0.6348, -0.6316, -0.63246, -0.63104, -0.62243, -0.6173, -0.61211, -0.60494, -0.59415, -0.58623, -0.58201, -0.57565, -0.57247, -0.56085, -0.53687, -0.51542, -0.58797, null, null], "p_failure_hi": [null, null, null, -0.66239, -0.66693, -0.68256, -0.69079, -0.69689, -0.70081, -0.70354, -0.70484, -0.70438, -0.70295, -0.70477, -0.70851, -0.71131, -0.71045, -0.70933, -0.7085, -0.70703, -0.70799, -0.71052, -0.71146, -0.70882, -0.7054, -0.70362, -0.7037, -0.7026, -0.69879, -0.69695, -0.69608, -0.69401, -0.6907, -0.6861, -0.68416, -0.68329, -0.6826, -0.67963, -0.67471, -0.67129, -0.66908, -0.6667, -0.66646, -0.66455, -0.66022, -0.65932, -0.66013, -0.65659, -0.65315, -0.65289, -0.65206, -0.64847, -0.64598, -0.64503, -0.64377, -0.64045, -0.63986, -0.64096, -0.6415, -0.64395, -0.64127, -0.63816, -0.63843, -0.63844, -0.63525, -0.63312, -0.63082, -0.62676, -0.62796, -0.62463, -0.6226, -0.62268, -0.62278, -0.62133, -0.62172, -0.61872, -0.61437, -0.61433, -0.61067, -0.60671, -0.60843, -0.61315, -0.61262, -0.6085, -0.60922, -0.60714, -0.59667, -0.59032, -0.58457, -0.57648, -0.56459, -0.55525, -0.55001, -0.54239, -0.53877, -0.52621, -0.49905, -0.4623, -0.47271, null, null], "p_failure_n": 214, "tgt_success_mean": [null, null, -0.64324, -0.50635, -0.38073, -0.35307, -0.34743, -0.34374, -0.34004, -0.33635, -0.33265, -0.32895, -0.32526, -0.32156, -0.31786, -0.31417, -0.31047, -0.30678, -0.30308, -0.29938, -0.29569, -0.29199, -0.2883, -0.2846, -0.2809, -0.27721, -0.27351, -0.26982, -0.26612, -0.26242, -0.25873, -0.25503, -0.25134, -0.24764, -0.24394, -0.24025, -0.23655, -0.23285, -0.22916, -0.22546, -0.22177, -0.21807, -0.21437, -0.21068, -0.20698, -0.20329, -0.19959, -0.19589, -0.1922, -0.1885, -0.18481, -0.18111, -0.17741, -0.17372, -0.17002, -0.16632, -0.16263, -0.15893, -0.15524, -0.15154, -0.14784, -0.14415, -0.14045, -0.13676, -0.13306, -0.12936, -0.12567, -0.12197, -0.11828, -0.11458, -0.11088, -0.10719, -0.10349, -0.09979, -0.0961, -0.0924, -0.08871, -0.08501, -0.08131, -0.07762, -0.07392, -0.07023, -0.06653, -0.06283, -0.05914, -0.05544, -0.05175, -0.04805, -0.04435, -0.04066, -0.03696, -0.03326, -0.02957, -0.02587, -0.02218, -0.01848, -0.01509, -0.01227, -0.0093, -0.00669, null]};
+const AC = {"grid": [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28, 0.29, 0.3, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36, 0.37, 0.38, 0.39, 0.4, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46, 0.47, 0.48, 0.49, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7, 0.71, 0.72, 0.73, 0.74, 0.75, 0.76, 0.77, 0.78, 0.79, 0.8, 0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89, 0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 1.0], "b_success_mean": [null, null, -0.07732, -0.08246, -0.07227, -0.05817, -0.04416, -0.04125, -0.03916, -0.02518, -0.03338, -0.04666, -0.03396, -0.01269, -0.00489, 0.00462, -0.00526, -0.01519, -0.00915, 0.0031, 0.02345, 0.0162, 0.00748, 0.01237, 0.01413, 0.01745, 0.01028, 0.00178, 0.00023, 0.01626, 0.00884, 0.00214, -0.02938, -0.0253, -0.02105, -0.01691, -0.00044, -0.01378, -0.041, -0.06271, -0.03944, -0.02447, -0.00919, -0.03185, -0.0117, 0.01494, 0.02712, 0.02423, -0.00394, -0.00587, -0.00293, -0.00287, -0.00774, -0.00437, 0.00563, 0.02627, 0.04835, 0.05362, 0.05502, 0.06649, 0.08127, 0.07301, 0.06296, 0.06138, 0.06573, 0.07346, 0.10525, 0.14786, 0.1794, 0.19347, 0.19515, 0.21219, 0.23992, 0.25716, 0.26536, 0.25902, 0.26786, 0.24836, 0.23075, 0.21974, 0.22082, 0.19565, 0.14032, 0.11738, 0.08898, 0.09658, 0.04294, -0.02788, -0.02279, -0.01087, -0.03447, null, null, null, null, null, null, null, null, null, null], "b_success_lo": [null, null, -0.11154, -0.10844, -0.0878, -0.07218, -0.05894, -0.0572, -0.05669, -0.04225, -0.05052, -0.06416, -0.05113, -0.02802, -0.0213, -0.01293, -0.02113, -0.03144, -0.02467, -0.01421, 0.00467, -0.00243, -0.01436, -0.00847, -0.00525, -0.00185, -0.00829, -0.01833, -0.02113, -0.0061, -0.0121, -0.0181, -0.04852, -0.04479, -0.04016, -0.03643, -0.02113, -0.03511, -0.06164, -0.0844, -0.06268, -0.04877, -0.03323, -0.0564, -0.03537, -0.00801, 0.00499, 0.00162, -0.02585, -0.02828, -0.02538, -0.02609, -0.033, -0.02909, -0.01806, 0.0045, 0.02729, 0.03185, 0.03068, 0.04227, 0.05679, 0.04596, 0.03468, 0.03353, 0.03634, 0.04385, 0.07584, 0.11873, 0.1518, 0.16575, 0.16535, 0.18381, 0.21282, 0.2292, 0.23524, 0.22856, 0.23937, 0.21873, 0.19684, 0.18228, 0.18113, 0.15292, 0.09897, 0.06974, 0.03691, 0.0272, -0.0142, -0.06928, -0.06091, -0.04495, -0.08753, null, null, null, null, null, null, null, null, null, null], "b_success_hi": [null, null, -0.0431, -0.05648, -0.05674, -0.04416, -0.02938, -0.0253, -0.02163, -0.00811, -0.01624, -0.02916, -0.01679, 0.00264, 0.01152, 0.02217, 0.01061, 0.00106, 0.00637, 0.02041, 0.04223, 0.03483, 0.02932, 0.03321, 0.03351, 0.03675, 0.02885, 0.02189, 0.02159, 0.03862, 0.02978, 0.02238, -0.01024, -0.00581, -0.00194, 0.00261, 0.02025, 0.00755, -0.02036, -0.04102, -0.0162, -0.00017, 0.01485, -0.0073, 0.01197, 0.03789, 0.04925, 0.04684, 0.01797, 0.01654, 0.01952, 0.02035, 0.01752, 0.02035, 0.02932, 0.04804, 0.06941, 0.07539, 0.07936, 0.09071, 0.10575, 0.10006, 0.09124, 0.08923, 0.09512, 0.10307, 0.13466, 0.17699, 0.207, 0.22119, 0.22495, 0.24057, 0.26702, 0.28512, 0.29548, 0.28948, 0.29635, 0.27799, 0.26466, 0.2572, 0.26051, 0.23838, 0.18167, 0.16502, 0.14105, 0.16596, 0.10008, 0.01352, 0.01533, 0.02321, 0.01859, null, null, null, null, null, null, null, null, null, null], "b_failure_mean": [null, null, null, -0.03627, -0.11509, -0.09013, -0.07116, -0.06395, -0.0644, -0.06422, -0.06147, -0.05328, -0.05344, -0.05658, -0.05294, -0.04676, -0.04477, -0.03545, -0.02581, -0.01666, -0.01553, -0.01634, -0.01268, -0.01056, -0.01352, -0.01658, -0.01796, -0.01895, -0.02103, -0.0155, -0.00575, -0.00517, -0.01438, -0.02185, -0.02166, -0.02028, -0.02013, -0.02261, -0.02667, -0.02965, -0.0329, -0.03148, -0.02798, -0.02285, -0.0248, -0.02994, -0.02805, -0.02924, -0.03377, -0.03546, -0.03229, -0.02956, -0.03185, -0.03863, -0.04556, -0.04783, -0.04785, -0.03578, -0.02406, -0.02863, -0.02987, -0.0238, -0.01392, -0.00497, -0.00213, -0.0128, -0.0287, -0.03855, -0.03642, -0.02841, -0.01614, -0.00744, -0.02068, -0.03549, -0.01754, 0.01211, 0.04061, 0.03874, 0.03492, 0.03385, 0.03463, 0.0782, 0.06285, -0.01428, -0.00877, 0.0267, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null], "b_failure_lo": [null, null, null, -0.10516, -0.13192, -0.10095, -0.08147, -0.07435, -0.07479, -0.07442, -0.07198, -0.06392, -0.06383, -0.06672, -0.06331, -0.0576, -0.05574, -0.04697, -0.03779, -0.02871, -0.02742, -0.02792, -0.02467, -0.02285, -0.02565, -0.02876, -0.02981, -0.03018, -0.03222, -0.02733, -0.018, -0.01784, -0.02699, -0.03426, -0.03465, -0.03305, -0.03279, -0.0352, -0.039, -0.04238, -0.04538, -0.04407, -0.04068, -0.0358, -0.03859, -0.04391, -0.04197, -0.04293, -0.04735, -0.04876, -0.0461, -0.04378, -0.04635, -0.05283, -0.05954, -0.06252, -0.063, -0.05085, -0.03943, -0.04442, -0.04565, -0.03931, -0.0297, -0.02111, -0.01802, -0.02857, -0.04613, -0.05774, -0.05601, -0.04802, -0.03577, -0.02744, -0.04156, -0.05699, -0.04156, -0.0144, 0.01016, 0.00553, -0.00397, -0.00474, -0.0082, 0.03495, 0.0188, -0.1251, -0.13985, -0.04732, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null], "b_failure_hi": [null, null, null, 0.03262, -0.09826, -0.07931, -0.06085, -0.05355, -0.05401, -0.05402, -0.05096, -0.04264, -0.04305, -0.04644, -0.04257, -0.03592, -0.0338, -0.02393, -0.01383, -0.00461, -0.00364, -0.00476, -0.00069, 0.00173, -0.00139, -0.0044, -0.00611, -0.00772, -0.00984, -0.00367, 0.0065, 0.0075, -0.00177, -0.00944, -0.00867, -0.00751, -0.00747, -0.01002, -0.01434, -0.01692, -0.02042, -0.01889, -0.01528, -0.0099, -0.01101, -0.01597, -0.01413, -0.01555, -0.02019, -0.02216, -0.01848, -0.01534, -0.01735, -0.02443, -0.03158, -0.03314, -0.0327, -0.02071, -0.00869, -0.01284, -0.01409, -0.00829, 0.00186, 0.01117, 0.01376, 0.00297, -0.01127, -0.01936, -0.01683, -0.0088, 0.00349, 0.01256, 0.0002, -0.01399, 0.00648, 0.03862, 0.07106, 0.07195, 0.07381, 0.07244, 0.07746, 0.12145, 0.1069, 0.09654, 0.12231, 0.10072, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null], "p_success_mean": [null, null, -0.12718, -0.09975, -0.10355, -0.08756, -0.0818, -0.07161, -0.0532, -0.04812, -0.04566, -0.04628, -0.04612, -0.03938, -0.02308, -0.01582, -0.01218, -0.01538, -0.01089, 0.00242, 0.00634, 0.00573, 0.01266, 0.01809, 0.01207, 0.02046, 0.02039, 0.03135, 0.04125, 0.04369, 0.02833, 0.02777, 0.0312, 0.02123, 0.01005, -0.00244, -0.01331, -0.02311, -0.02407, -0.02452, -0.01839, -0.02246, -0.02549, -0.03273, -0.02823, -0.02232, -0.03226, -0.04587, -0.0399, -0.02869, -0.02216, -0.01129, -0.02067, -0.03017, -0.01932, -0.00838, 0.01003, 0.01856, 0.03513, 0.05247, 0.06612, 0.07574, 0.09066, 0.10687, 0.12004, 0.12898, 0.16145, 0.19472, 0.21629, 0.2371, 0.2598, 0.27674, 0.28006, 0.28053, 0.28339, 0.27668, 0.26707, 0.23341, 0.21107, 0.20977, 0.19327, 0.16012, 0.08874, 0.05429, 0.05817, 0.08269, 0.07186, 0.06446, 0.05071, 0.02285, -0.11729, null, null, null, null, null, null, null, null, null, null], "p_success_lo": [null, null, -0.15688, -0.11805, -0.1152, -0.09903, -0.09349, -0.08394, -0.0665, -0.06092, -0.05824, -0.05879, -0.05667, -0.04971, -0.03563, -0.0301, -0.02611, -0.0297, -0.02488, -0.01044, -0.00752, -0.00784, -0.00106, 0.00407, -0.00272, 0.0065, 0.00723, 0.01778, 0.02719, 0.02833, 0.01224, 0.01134, 0.01477, 0.00439, -0.00623, -0.01801, -0.03052, -0.04014, -0.04174, -0.04348, -0.03837, -0.04314, -0.04598, -0.05326, -0.04751, -0.04157, -0.04969, -0.0614, -0.05555, -0.0453, -0.03976, -0.03062, -0.04052, -0.05065, -0.04144, -0.03094, -0.0099, -0.00211, 0.01149, 0.02744, 0.03949, 0.04846, 0.06408, 0.08161, 0.09349, 0.10058, 0.1321, 0.16329, 0.18466, 0.2067, 0.23092, 0.25006, 0.25345, 0.25391, 0.25603, 0.24843, 0.23826, 0.20111, 0.17431, 0.17185, 0.15142, 0.11284, 0.04365, 0.0097, 0.01218, 0.02804, 0.0144, -0.00419, -0.00058, -0.02253, -0.20214, null, null, null, null, null, null, null, null, null, null], "p_success_hi": [null, null, -0.09748, -0.08145, -0.0919, -0.07609, -0.07011, -0.05928, -0.0399, -0.03532, -0.03308, -0.03377, -0.03557, -0.02905, -0.01053, -0.00154, 0.00175, -0.00106, 0.0031, 0.01528, 0.0202, 0.0193, 0.02638, 0.03211, 0.02686, 0.03442, 0.03355, 0.04492, 0.05531, 0.05905, 0.04442, 0.0442, 0.04763, 0.03807, 0.02633, 0.01313, 0.0039, -0.00608, -0.0064, -0.00556, 0.00159, -0.00178, -0.005, -0.0122, -0.00895, -0.00307, -0.01483, -0.03034, -0.02425, -0.01208, -0.00456, 0.00804, -0.00082, -0.00969, 0.0028, 0.01418, 0.02996, 0.03923, 0.05877, 0.0775, 0.09275, 0.10302, 0.11724, 0.13213, 0.14659, 0.15738, 0.1908, 0.22615, 0.24792, 0.2675, 0.28868, 0.30342, 0.30667, 0.30715, 0.31075, 0.30493, 0.29588, 0.26571, 0.24783, 0.24769, 0.23512, 0.2074, 0.13383, 0.09888, 0.10416, 0.13734, 0.12932, 0.13311, 0.102, 0.06823, -0.03244, null, null, null, null, null, null, null, null, null, null], "p_failure_mean": [null, null, null, -0.07746, -0.09066, -0.0767, -0.07237, -0.06526, -0.0592, -0.05548, -0.05131, -0.04412, -0.0406, -0.0354, -0.03184, -0.0265, -0.02179, -0.01798, -0.01603, -0.01783, -0.01512, -0.01595, -0.01603, -0.01573, -0.01585, -0.01335, -0.0085, -0.00411, -0.00597, -0.01111, -0.01265, -0.013, -0.01453, -0.01673, -0.01529, -0.01433, -0.01462, -0.01823, -0.02098, -0.02431, -0.02894, -0.03394, -0.0374, -0.03734, -0.03636, -0.03419, -0.03182, -0.02989, -0.03291, -0.03326, -0.03469, -0.03536, -0.03382, -0.02981, -0.02455, -0.02271, -0.0188, -0.01365, -0.01046, -0.01022, -0.01045, -0.01184, -0.00821, -0.00574, -0.01147, -0.01869, -0.01723, -0.01717, -0.01416, -0.01625, -0.0159, -0.00769, 0.00026, 0.00418, 0.00752, 0.01605, 0.03273, 0.02766, 0.06455, 0.08189, 0.09437, 0.07472, 0.12931, 0.15749, 0.05473, -0.06939, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null], "p_failure_lo": [null, null, null, -0.10812, -0.10162, -0.08529, -0.08055, -0.07302, -0.06678, -0.06324, -0.05961, -0.05236, -0.04891, -0.04368, -0.0404, -0.0352, -0.03055, -0.02684, -0.0251, -0.02707, -0.02451, -0.02531, -0.02538, -0.02514, -0.02512, -0.02254, -0.01768, -0.01339, -0.01525, -0.02048, -0.02197, -0.02248, -0.02474, -0.02673, -0.02502, -0.02392, -0.0241, -0.02757, -0.0304, -0.03361, -0.03798, -0.0435, -0.04692, -0.04693, -0.04638, -0.0442, -0.04136, -0.03912, -0.04223, -0.04325, -0.04557, -0.04685, -0.04539, -0.0412, -0.03635, -0.03487, -0.03121, -0.026, -0.02299, -0.02358, -0.02411, -0.02488, -0.02161, -0.01919, -0.02505, -0.03262, -0.03216, -0.03339, -0.03099, -0.03391, -0.03433, -0.02679, -0.01938, -0.01802, -0.01665, -0.01005, 0.00287, -0.00384, 0.02727, 0.04184, 0.04884, 0.01749, 0.06807, 0.03586, -0.07004, -0.14581, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null], "p_failure_hi": [null, null, null, -0.0468, -0.0797, -0.06811, -0.06419, -0.0575, -0.05162, -0.04772, -0.04301, -0.03588, -0.03229, -0.02712, -0.02328, -0.0178, -0.01303, -0.00912, -0.00696, -0.00859, -0.00573, -0.00659, -0.00668, -0.00632, -0.00658, -0.00416, 0.00068, 0.00517, 0.00331, -0.00174, -0.00333, -0.00352, -0.00432, -0.00673, -0.00556, -0.00474, -0.00514, -0.00889, -0.01156, -0.01501, -0.0199, -0.02438, -0.02788, -0.02775, -0.02634, -0.02418, -0.02228, -0.02066, -0.02359, -0.02327, -0.02381, -0.02387, -0.02225, -0.01842, -0.01275, -0.01055, -0.00639, -0.0013, 0.00207, 0.00314, 0.00321, 0.0012, 0.00519, 0.00771, 0.00211, -0.00476, -0.0023, -0.00095, 0.00267, 0.00141, 0.00253, 0.01141, 0.0199, 0.02638, 0.03169, 0.04215, 0.06259, 0.05916, 0.10183, 0.12194, 0.1399, 0.13195, 0.19055, 0.27912, 0.1795, 0.00703, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]};
+const AD = {"centers": [-0.6875, -0.6625, -0.6375, -0.6125, -0.5875, -0.5625, -0.5375, -0.5125, -0.4875, -0.4625, -0.4375, -0.4125, -0.3875, -0.3625, -0.3375, -0.3125, -0.2875, -0.2625, -0.2375, -0.2125, -0.1875, -0.1625, -0.1375, -0.1125, -0.0875, -0.0625, -0.0375, -0.0125, 0.0125, 0.0375, 0.0625, 0.0875, 0.1125, 0.1375, 0.1625, 0.1875, 0.2125, 0.2375, 0.2625, 0.2875, 0.3125, 0.3375, 0.3625, 0.3875, 0.4125, 0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625, 0.5875, 0.6125, 0.6375, 0.6625, 0.6875], "b_success": [0.0, 0.0169, 0.0, 0.0338, 0.0422, 0.076, 0.0676, 0.076, 0.0845, 0.1267, 0.3125, 0.1774, 0.2449, 0.3125, 0.5321, 0.3885, 0.5152, 0.701, 0.8108, 0.9206, 1.1318, 1.3345, 1.3598, 1.8497, 2.027, 2.6014, 2.3226, 2.0101, 1.9595, 1.6132, 1.5456, 1.3514, 1.3767, 1.1233, 1.0389, 0.9966, 1.0389, 0.8868, 0.6334, 0.701, 0.5997, 0.6841, 0.6926, 0.4983, 0.397, 0.3632, 0.3463, 0.2618, 0.3041, 0.2618, 0.1774, 0.1774, 0.1774, 0.1774, 0.152, 0.3885], "b_failure": [0.0507, 0.0169, 0.0225, 0.0056, 0.0507, 0.0845, 0.0845, 0.1014, 0.124, 0.1859, 0.2536, 0.3043, 0.3719, 0.5691, 0.6592, 0.6818, 0.8508, 1.1157, 1.1607, 1.2678, 1.6115, 1.6791, 1.6678, 1.9552, 2.0285, 2.1017, 2.0285, 1.927, 1.6002, 1.7749, 1.7524, 1.3692, 1.3016, 1.3016, 1.3523, 0.9804, 0.8283, 0.7719, 0.5973, 0.5297, 0.4846, 0.4733, 0.417, 0.2197, 0.2817, 0.2085, 0.1578, 0.1352, 0.1296, 0.1071, 0.0789, 0.0338, 0.0507, 0.0394, 0.0169, 0.0451], "p_success": [0.0338, 0.0, 0.0169, 0.0, 0.0, 0.0169, 0.0, 0.0253, 0.0253, 0.0338, 0.0422, 0.1182, 0.1689, 0.1689, 0.3378, 0.4223, 0.4983, 0.5828, 0.6757, 0.8868, 1.2078, 1.4443, 1.7314, 1.9932, 2.2466, 3.0574, 2.8801, 2.2128, 2.2128, 1.6976, 1.6216, 1.6047, 1.3682, 1.0642, 0.853, 0.9544, 0.7517, 0.7348, 0.7264, 0.5912, 0.6503, 0.3547, 0.4054, 0.3294, 0.2956, 0.3547, 0.4139, 0.4307, 0.2365, 0.2449, 0.2449, 0.1943, 0.1858, 0.1436, 0.1098, 0.397], "p_failure": [0.0451, 0.0, 0.0, 0.0056, 0.0169, 0.0056, 0.0169, 0.0225, 0.0282, 0.0676, 0.0789, 0.1183, 0.2085, 0.2592, 0.3268, 0.4057, 0.586, 0.7325, 1.0818, 1.3805, 1.5946, 1.7242, 2.0792, 2.22, 2.575, 2.4341, 2.5468, 2.4172, 2.4172, 2.1186, 1.9101, 1.7693, 1.6115, 1.3185, 1.1382, 1.0086, 0.755, 0.5127, 0.4282, 0.3775, 0.2479, 0.2479, 0.2648, 0.1521, 0.1465, 0.1127, 0.0902, 0.0225, 0.0676, 0.0563, 0.0732, 0.0507, 0.0225, 0.0056, 0.0225, 0.0732]};
+
+const GRID_C = "#e8ebf0", AXIS_C = "#6b7280";
+const B = "#2563eb", P = "#ea580c", BR = "#60a5fa", L = "#7c3aed", G = "#059669", R = "#dc2626", GRAY = "#6b7280";
+
+function niceTicks(vmin, vmax, n) {
+  if (vmin === vmax) { vmin -= 0.5; vmax += 0.5; }
+  const span = vmax - vmin;
+  const step0 = Math.pow(10, Math.floor(Math.log10(span / n)));
+  const err = span / n / step0;
+  const mult = err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1;
+  const step = step0 * mult;
+  const lo = Math.floor(vmin / step) * step;
+  const hi = Math.ceil(vmax / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + 1e-9; v += step) ticks.push(v);
+  return ticks;
+}
+
+function lineChart(elId, series, opts={}) {
+  const el = document.getElementById(elId);
+  const W = el.clientWidth || 900, H = opts.height || 260;
+  const m = { l: 52, r: (opts.y2 ? 56 : 16), t: 12, b: 30 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  series.filter(s => !s.y2).forEach(s => {
+    s.xs.forEach(x => { xMin = Math.min(xMin, x); xMax = Math.max(xMax, x); });
+    s.ys.forEach(y => { if (y !== null) { yMin = Math.min(yMin, y); yMax = Math.max(yMax, y); } });
+    if (s.lo) s.lo.forEach(y => { if (y !== null) yMin = Math.min(yMin, y); });
+    if (s.hi) s.hi.forEach(y => { if (y !== null) yMax = Math.max(yMax, y); });
+  });
+  if (opts.yMin !== undefined) yMin = opts.yMin;
+  if (opts.yMax !== undefined) yMax = opts.yMax;
+  let y2Min = Infinity, y2Max = -Infinity;
+  series.filter(s => s.y2).forEach(s => s.ys.forEach(y => { if (y !== null) { y2Min = Math.min(y2Min, y); y2Max = Math.max(y2Max, y); } }));
+  const pad = (yMax - yMin) * 0.08 || 0.01; yMin -= pad; yMax += pad;
+  if (opts.y2) { const p2 = (y2Max - y2Min) * 0.08 || 0.01; y2Min -= p2; y2Max += p2; }
+  const sx = v => m.l + (v - xMin) / ((xMax - xMin) || 1) * iw;
+  const sy = v => m.t + ih - (v - yMin) / (yMax - yMin) * ih;
+  const sy2 = v => m.t + ih - (v - y2Min) / ((y2Max - y2Min) || 1) * ih;
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  niceTicks(yMin, yMax, 5).forEach(t => {
+    if (t < yMin - 1e-9 || t > yMax + 1e-9) return;
+    s += `<line x1="${m.l}" y1="${sy(t)}" x2="${W - m.r}" y2="${sy(t)}" stroke="${GRID_C}" stroke-width="1"/>`;
+    s += `<text x="${m.l - 8}" y="${sy(t) + 4}" fill="${AXIS_C}" font-size="11" text-anchor="end">${t.toFixed(Math.abs(t) < 1 && t !== 0 ? 2 : (Math.abs(t) < 10 ? 1 : 0))}</text>`;
+  });
+  niceTicks(xMin, xMax, 6).forEach(t => {
+    s += `<text x="${sx(t)}" y="${H - 8}" fill="${AXIS_C}" font-size="11" text-anchor="middle">${opts.xFloat ? t.toFixed(2) : Math.round(t)}</text>`;
+  });
+  if (opts.y2) {
+    niceTicks(y2Min, y2Max, 5).forEach(t => {
+      s += `<text x="${W - m.r + 8}" y="${sy2(t) + 4}" fill="${AXIS_C}" font-size="11">${t.toFixed(2)}</text>`;
+    });
+  }
+  if (opts.hline !== undefined) {
+    s += `<line x1="${m.l}" y1="${sy(opts.hline)}" x2="${W - m.r}" y2="${sy(opts.hline)}" stroke="#9ca3af" stroke-dasharray="4 4" stroke-width="1"/>`;
+  }
+  series.forEach(sr => {
+    const f = sr.y2 ? sy2 : sy;
+    if (sr.lo && sr.hi) {
+      let pts = "", rev = [];
+      for (let i = 0; i < sr.xs.length; i++) {
+        if (sr.lo[i] === null || sr.hi[i] === null) continue;
+        pts += `${sx(sr.xs[i]).toFixed(1)},${f(sr.hi[i]).toFixed(1)} `;
+        rev.unshift(`${sx(sr.xs[i]).toFixed(1)},${f(sr.lo[i]).toFixed(1)}`);
+      }
+      if (pts) s += `<polygon points="${pts + rev.join(' ')}" fill="${sr.color}" opacity="0.13" stroke="none"/>`;
+    }
+    let pts = "";
+    for (let i = 0; i < sr.xs.length; i++) {
+      if (sr.ys[i] === null) continue;
+      pts += `${sx(sr.xs[i]).toFixed(1)},${f(sr.ys[i]).toFixed(1)} `;
+    }
+    s += `<polyline points="${pts.trim()}" fill="none" stroke="${sr.color}" stroke-width="${sr.width || 2}" stroke-linejoin="round" ${sr.dash ? `stroke-dasharray="${sr.dash}"` : ""}/>`;
+    if (sr.markers) {
+      for (let i = 0; i < sr.xs.length; i++) {
+        if (sr.ys[i] === null) continue;
+        s += `<circle cx="${sx(sr.xs[i])}" cy="${f(sr.ys[i])}" r="2.6" fill="${sr.color}"/>`;
+      }
+    }
+  });
+  if (opts.vline !== undefined) {
+    s += `<line x1="${sx(opts.vline)}" y1="${m.t}" x2="${sx(opts.vline)}" y2="${m.t + ih}" stroke="#dc2626" stroke-dasharray="5 4" stroke-width="1.5"/>`;
+    s += `<text x="${sx(opts.vline) + 5}" y="${m.t + 12}" fill="#dc2626" font-size="11">${opts.vlabel || ""}</text>`;
+  }
+  s += `<text x="${m.l}" y="${H - 8}" fill="${AXIS_C}" font-size="11" text-anchor="start">${opts.xlabel || "optimizer step"}</text>`;
+  s += "</svg>";
+  el.innerHTML = s;
+}
+
+function histChart(elId, centers, series, opts={}) {
+  const el = document.getElementById(elId);
+  const W = el.clientWidth || 900, H = opts.height || 240;
+  const m = { l: 46, r: 16, t: 12, b: 30 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const xMin = centers[0], xMax = centers[centers.length - 1];
+  let yMax = 0;
+  series.forEach(s => s.ys.forEach(y => yMax = Math.max(yMax, y)));
+  yMax *= 1.1;
+  const sx = v => m.l + (v - xMin) / (xMax - xMin) * iw;
+  const sy = v => m.t + ih - v / yMax * ih;
+  const bw = (centers[1] - centers[0]) / (xMax - xMin) * iw;
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  niceTicks(0, yMax, 4).forEach(t => {
+    if (t > yMax) return;
+    s += `<line x1="${m.l}" y1="${sy(t)}" x2="${W - m.r}" y2="${sy(t)}" stroke="${GRID_C}" stroke-width="1"/>`;
+    s += `<text x="${m.l - 8}" y="${sy(t) + 4}" fill="${AXIS_C}" font-size="11" text-anchor="end">${t.toFixed(1)}</text>`;
+  });
+  niceTicks(xMin, xMax, 6).forEach(t => {
+    s += `<text x="${sx(t)}" y="${H - 8}" fill="${AXIS_C}" font-size="11" text-anchor="middle">${t.toFixed(1)}</text>`;
+  });
+  s += `<line x1="${sx(0)}" y1="${m.t}" x2="${sx(0)}" y2="${m.t + ih}" stroke="#9ca3af" stroke-width="1"/>`;
+  series.forEach((sr, idx) => {
+    const off = (idx - (series.length - 1) / 2) * bw * 0.44;
+    for (let i = 0; i < centers.length; i++) {
+      const x = sx(centers[i]) - bw * 0.44 + off;
+      s += `<rect x="${x.toFixed(1)}" y="${sy(sr.ys[i]).toFixed(1)}" width="${(bw * 0.42).toFixed(1)}" height="${(m.t + ih - sy(sr.ys[i])).toFixed(1)}" fill="${sr.color}" opacity="0.8"/>`;
+    }
+  });
+  s += `<text x="${m.l}" y="${H - 8}" fill="${AXIS_C}" font-size="11" text-anchor="start">A50 advantage</text>`;
+  s += "</svg>";
+  el.innerHTML = s;
+}
+
+// teacher
+lineChart("chart-teacher", [
+  { xs: TEACHER.epochs, ys: TEACHER.gain, color: B, markers: true },
+  { xs: TEACHER.epochs, ys: TEACHER.ssim, color: P, y2: true, markers: true },
+], { xlabel: "epoch", y2: true });
+
+// droid
+lineChart("chart-droid-sp", [
+  { xs: DROID.steps, ys: DROID.b_spearman, color: B, markers: true },
+  { xs: DROID.steps, ys: DROID.p_spearman, color: P, markers: true },
+]);
+lineChart("chart-droid-mae", [
+  { xs: DROID.steps, ys: DROID.b_mae, color: B, markers: true },
+  { xs: DROID.steps, ys: DROID.p_mae, color: P, markers: true },
+]);
+
+// value curves
+const g = VC.grid;
+lineChart("chart-vc-succ", [
+  { xs: g, ys: VC.tgt_success_mean, color: G, dash: "6 4", width: 2.4 },
+  { xs: g, ys: VC.b_success_mean, lo: VC.b_success_lo, hi: VC.b_success_hi, color: B },
+  { xs: g, ys: VC.p_success_mean, lo: VC.p_success_lo, hi: VC.p_success_hi, color: P },
+], { xlabel: "归一化回合进度", xFloat: true, yMin: -1, yMax: 0, hline: 0 });
+lineChart("chart-vc-fail", [
+  { xs: [0, 1], ys: [-1, -1], color: GRAY, dash: "6 4", width: 2.4 },
+  { xs: g, ys: VC.b_failure_mean, lo: VC.b_failure_lo, hi: VC.b_failure_hi, color: B },
+  { xs: g, ys: VC.p_failure_mean, lo: VC.p_failure_lo, hi: VC.p_failure_hi, color: P },
+], { xlabel: "归一化回合进度", xFloat: true, yMin: -1, yMax: 0 });
+
+// advantage curves
+lineChart("chart-ac-succ", [
+  { xs: g, ys: AC.b_success_mean, lo: AC.b_success_lo, hi: AC.b_success_hi, color: B },
+  { xs: g, ys: AC.p_success_mean, lo: AC.p_success_lo, hi: AC.p_success_hi, color: P },
+], { xlabel: "归一化回合进度", xFloat: true, hline: 0 });
+lineChart("chart-ac-fail", [
+  { xs: g, ys: AC.b_failure_mean, lo: AC.b_failure_lo, hi: AC.b_failure_hi, color: B },
+  { xs: g, ys: AC.p_failure_mean, lo: AC.p_failure_lo, hi: AC.p_failure_hi, color: P },
+], { xlabel: "归一化回合进度", xFloat: true, hline: 0 });
+
+// advantage distributions
+histChart("chart-ad-succ", AD.centers, [
+  { ys: AD.b_success, color: B },
+  { ys: AD.p_success, color: P },
+]);
+histChart("chart-ad-fail", AD.centers, [
+  { ys: AD.b_failure, color: B },
+  { ys: AD.p_failure, color: P },
+]);
+
+// 302-rollout learning curves
+const rb = CURVES.rollout_baseline, rp = CURVES.rollout_proposed;
+function pair(id, key) {
+  lineChart(id, [
+    { xs: rb.steps, ys: rb[key], color: B, markers: true },
+    { xs: rp.steps, ys: rp[key], color: P, markers: true },
+  ], { vline: 2000, vlabel: "primary" });
+}
+pair("chart-r-aucmean", "auc_mean");
+pair("chart-r-auclast", "auc_last");
+pair("chart-r-sp", "spearman");
+pair("chart-r-sigma", "a50_sigma");
+
+// all400 learning curves
+const a1 = CURVES.a400_baseline, a2 = CURVES.a400_baseline_rerun, a3 = CURVES.a400_proposed, a4 = CURVES.a400_latent128;
+function quad(id, key) {
+  lineChart(id, [
+    { xs: a1.steps, ys: a1[key], color: B, markers: true },
+    { xs: a2.steps, ys: a2[key], color: BR, dash: "6 4", markers: true },
+    { xs: a3.steps, ys: a3[key], color: P, markers: true },
+    { xs: a4.steps, ys: a4[key], color: L, markers: true },
+  ], { vline: 2000, vlabel: "primary" });
+}
+quad("chart-a-aucmean", "auc_mean");
+quad("chart-a-sp", "spearman");
+quad("chart-a-mae", "mae");
+</script>
+</body>
+</html>

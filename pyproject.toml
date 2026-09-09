@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lapo-value-model"
+version = "0.1.0"
+description = "LAPO-regularized Qwen3-VL distributional value model for DROID"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "pyarrow",
+  "PyYAML",
+  "Pillow",
+  "av",
+  "torch",
+  "torchvision",
+  "transformers>=4.57,<5",
+  "peft>=0.18",
+  "accelerate>=1.10",
+  "webdataset>=1.0",
+  "scipy",
+  "scikit-learn",
+  "scikit-image",
+  "matplotlib",
+  "tensorboard",
+  "safetensors",
+]
+
+[project.scripts]
+lapo-value = "lapo_value_model.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
