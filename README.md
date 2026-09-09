@@ -34,6 +34,10 @@ LeRobot v3.0 ports of [DROID-COMMUNITY](https://droid-dataset.github.io/): [jnog
 | Source video | H.264 RGB, 720×1280 |
 | Source cameras | `left_external`, `right_external`, `wrist` |
 | Camera used here | **`observation.images.left_external` only** |
+| Source disk size | **1.04 TiB** success + **258 GiB** failure ≈ **1.29 TiB** total (three cameras) |
+| `left_external` videos only | 349 GiB success + 86 GiB failure ≈ **435 GiB** |
+| Extracted training shards | ≈ **42 GiB** (JPEG WebDataset at 336×336, four frames per anchor) |
+| Frames | 14,153,535 success + 3,476,037 failure = **17,629,572** |
 | Student history | frames `[-10, -5, 0]` ≈ 0.67 s / 0.33 s / now |
 | Teacher future | `+5` frames ≈ 0.33 s |
 | Student image | letterbox to 336×336, JPEG quality 90 |
@@ -53,10 +57,16 @@ Task families (from the DROID manifest): `container_transfer`, `reposition`, `li
 
 Private LeRobot collection `openpi_rollout`: Franka FR3 plug insertion at 30 Hz, cameras `camera_0` / `camera_1` at 480×640 RGB (AV1). This repo uses **`observation.images.camera_1`**.
 
-| Protocol | Episodes | Anchors | Notes |
-|---|---:|---:|---|
-| 302-rollout OOF | 302 (88 success / 214 failure) | 14,855 | 98 demonstration episodes excluded; 5 episode-level folds stratified by `dataset_name × outcome` |
-| all400 | 400 (98 demos + 302 rollouts) | 18,071 | seed `20260901`; 5-fold, 2,000 steps/fold, batch 16 |
+| Spec | Value |
+|---|---|
+| Source disk size | **2.6 GiB** (449 MiB demonstrations + ~2.2 GiB rollouts) |
+| Extracted training artifacts | ≈ **2.3 GiB** |
+| Frames | **190,833** (34,633 demo + 156,200 rollout) |
+
+| Protocol | Episodes | Frames | Anchors | Notes |
+|---|---:|---:|---:|---|
+| 302-rollout OOF | 302 (88 success / 214 failure) | 156,200 | 14,855 | 98 demonstration episodes excluded; 5 episode-level folds stratified by `dataset_name × outcome` |
+| all400 | 400 (98 demos + 302 rollouts) | 190,833 | 18,071 | seed `20260901`; 5-fold, 2,000 steps/fold, batch 16 |
 
 OpenPI history is `[-20, -10, 0]` at 30 Hz (same wall-clock spacing as DROID). Teacher future is `+10` source frames. Anchors are taken every 10 source frames. Strict A50 uses 50 model frames = 100 source frames, which yields **11,835** A50 windows under that stride.
 
