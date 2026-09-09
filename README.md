@@ -1,70 +1,116 @@
-# LAPO + Qwen3‑VL RECAP-style Value Model
+# LAPO + Qwen3-VL RECAP-style Value Model
 
-本项目在本地 DROID success/failure 数据上训练严格因果、语言条件的 201-bin 价值模型。训练期 LAPO teacher 从当前帧和未来帧提取 32D transition latent；部署模型只读取三帧历史、粗粒度任务语言以及 `observation.images.left_external`，不会读取未来帧。
+This repository trains a strictly causal, language-conditioned 201-bin distributional value model on local DROID success/failure data. During training, a LAPO teacher extracts a 32D transition latent from the current frame and a future frame. The deployed model reads only three history frames, a coarse task-language prompt, and `observation.images.left_external`; it never sees future frames.
 
-详细方法调研见 [docs/recap_value_model_research.md](docs/recap_value_model_research.md)。原始实施方案位于相邻文件 `../lapo_qwenvl_value_model_plan_with_architecture.html`。
+Method notes: [docs/recap_value_model_research.md](docs/recap_value_model_research.md). Architecture I/O: [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).
 
-## 已固定的正式配置
+## Hardware
 
-- Backbone：本地 `Qwen3-VL-2B-Instruct`，bf16。
-- LoRA：rank 16；语言 q/k/v/o 与视觉 qkv/proj。
-- Value Head：`2048 → 512 → 256 → 201`，取 `[-1,0]` bin 概率期望。
-- Latent Head：`2048 → 512 → 128 → 32`，仅训练期使用。
-- Student loss：categorical CE + `0.1 × Huber(latent)`。
-- 两卡：物理 GPU 6、7；训练 micro-batch 160/卡，累积 1，全局 effective batch 320；验证 micro-batch 80/卡。
-- 全量 anchor：526,718；train/val/test = 419,344/53,772/53,602。
+All reported training and evaluation runs used **two Hygon BW1000_H DCUs** (a ROCm/DTK accelerator, not NVIDIA).
 
-## Latent-hidden 串联重设计（OpenPI all400）
+| Item | Spec |
+|---|---|
+| Accelerator | 2× Hygon BW1000_H DCU |
+| Physical devices | GPU 6 and 7 (`HIP_VISIBLE_DEVICES=6,7` maps to in-process `cuda:0,cuda:1`) |
+| Per-card memory | 64 GiB |
+| Stack | DTK / ROCm PyTorch 2.7.1, Python 3.11.9, transformers 4.57.1, bf16 |
+| Student train memory | micro-batch 160/card → measured `max_memory_allocated` ≈ **40.53 GiB/card** |
+| Student val memory | micro-batch 80/card, so variable-length sequences do not push the cache toward the 64 GiB limit |
+| OpenPI folds | 8-card parallel for folds 0–3, then GPUs 6,7 for fold 4 |
+| Inference (batch 1) | ≈ 108 ms/anchor (≈ 9.2 anchors/s), peak ≈ 8.26 GiB/card |
 
-模型现支持 `value_path=direct|latent_hidden`。旧 Baseline 保持
-`2048→512→256→201` 直接价值头；新 Proposed 使用
-`2048→512→128` Latent Trunk，然后把 128D 隐层送入
-`128→512→256→201` Value Head，同时由独立 `128→32` projection 对齐 Teacher latent。
-价值 CE 会更新 Latent Trunk，但不会经过 32D projection。部署新 Proposed 时保留
-Latent Trunk，仍只读取三帧历史和任务语言，不读取未来帧或 Teacher 输出。
+On this ROCm stack, vision fused-attention backward produces non-finite LoRA gradients. Vision attention is therefore fixed to eager; language attention still uses the efficient kernel.
 
-对应五折重训入口为：
+## Datasets
+
+### DROID (pretraining)
+
+LeRobot v3.0 ports of [DROID-COMMUNITY](https://droid-dataset.github.io/): [jnogga/droid_success](https://huggingface.co/datasets/jnogga/droid_success) and [jnogga/droid_failure](https://huggingface.co/datasets/jnogga/droid_failure). Robot: Franka Emika Panda + Robotiq 2F-85.
+
+| Spec | Value |
+|---|---|
+| Format | LeRobot v3.0 |
+| FPS | 15 |
+| Source video | H.264 RGB, 720×1280 |
+| Source cameras | `left_external`, `right_external`, `wrist` |
+| Camera used here | **`observation.images.left_external` only** |
+| Student history | frames `[-10, -5, 0]` ≈ 0.67 s / 0.33 s / now |
+| Teacher future | `+5` frames ≈ 0.33 s |
+| Student image | letterbox to 336×336, JPEG quality 90 |
+| Teacher image | 224×224 |
+| Anchors / episode | 8 |
+| Split | 80 / 10 / 10 train / val / test |
+| Raw episodes | 53,282 success + 13,747 failure |
+| Eligible episodes | 52,475 success + 13,422 failure (19 shared stations) |
+| Filters dropped | too-short, no-action, unshared-station, duplicate UUID, inconsistent failure labels |
+| Anchors | **526,718** total; train / val / test = **419,344 / 53,772 / 53,602** |
+| Anchors by outcome | 419,800 success / 106,918 failure |
+| Language | coarse task-family prompt, shared by success and failure; the prompt does not contain the outcome label |
+
+Task families (from the DROID manifest): `container_transfer`, `reposition`, `lid`, `fold_spread`, `slidable_open_close`, `clean`, `hang`, `button`, `pour`, `tool_use`, `twist`, `hinged_open_close`, `bagging`, `stir`, `curtain`, `multi_step` (failure only), and `other` (capped at 15% of the split).
+
+### OpenPI FR3 plug (finetune / eval)
+
+Private LeRobot collection `openpi_rollout`: Franka FR3 plug insertion at 30 Hz, cameras `camera_0` / `camera_1` at 480×640 RGB (AV1). This repo uses **`observation.images.camera_1`**.
+
+| Protocol | Episodes | Anchors | Notes |
+|---|---:|---:|---|
+| 302-rollout OOF | 302 (88 success / 214 failure) | 14,855 | 98 demonstration episodes excluded; 5 episode-level folds stratified by `dataset_name × outcome` |
+| all400 | 400 (98 demos + 302 rollouts) | 18,071 | seed `20260901`; 5-fold, 2,000 steps/fold, batch 16 |
+
+OpenPI history is `[-20, -10, 0]` at 30 Hz (same wall-clock spacing as DROID). Teacher future is `+10` source frames. Anchors are taken every 10 source frames. Strict A50 uses 50 model frames = 100 source frames, which yields **11,835** A50 windows under that stride.
+
+Report OpenPI numbers as **OOF finetune evaluation**, not as an untouched external holdout.
+
+## Frozen training config
+
+- Backbone: local `Qwen3-VL-2B-Instruct`, bf16.
+- LoRA: rank 16; language q/k/v/o and vision qkv/proj.
+- Value Head: `2048 → 512 → 256 → 201`, expectation over bins in `[-1, 0]`.
+- Latent Head: `2048 → 512 → 128 → 32`, training-only.
+- Student loss: categorical CE + `0.1 × Huber(latent)`.
+- Two cards: physical GPUs 6 and 7; train micro-batch 160/card, accum 1, global effective batch 320; val micro-batch 80/card.
+
+## Latent-hidden cascade (OpenPI all400)
+
+The model supports `value_path=direct|latent_hidden`. The old baseline keeps a direct value head `2048→512→256→201`. The proposed model uses a `2048→512→128` latent trunk, feeds that 128D hidden state into a `128→512→256→201` value head, and aligns a separate `128→32` projection to the teacher latent. Value CE updates the latent trunk but does not flow through the 32D projection. Deployed proposed models keep the latent trunk and still read only three history frames and task language — no future frames and no teacher outputs.
+
+Five-fold retraining entry point:
 
 ```bash
 scripts/run_openpi_all400_latent128_seed20260901.sh
 ```
 
-该协议使用 400 episodes、batch size 16、每折 2,000 steps，仅保存 step 1000/2000，
-并保留 step 0/1000/2000 的 held-out OOF 推理。Baseline 完整加载旧 DROID Value Head，
-Proposed 迁移旧 LoRA/Latent Head 并固定 seed 重置新 Value Head；因此比较的是完整
-架构与初始化方案，而不是架构本身的单一因果效应。
+That protocol uses 400 episodes, batch size 16, 2,000 steps per fold, checkpoints at steps 1000/2000, and held-out OOF inference at steps 0/1000/2000. Baseline fully loads the old DROID value head. Proposed migrates the old LoRA / latent head and reseeds a new value head. The comparison is therefore the full architecture-plus-initialization package, not a single causal effect of the architecture alone.
 
-两卡 Student 冒烟中，训练 micro-batch 160/卡的 `max_memory_allocated` 实测约 40.53 GiB/卡。验证 batch 单独设为 80/卡，以避免长时间验证中可变序列形状导致缓存逼近 64 GiB 上限。ROCm 上视觉 fused attention backward 会产生非有限 LoRA 梯度，本实现只把视觉 attention 固定为 eager；语言 attention 仍使用高效实现。
+## Environment
 
-## 环境
-
-项目 venv 使用系统 DTK/ROCm PyTorch：
+The project venv uses the system DTK/ROCm PyTorch:
 
 ```bash
-cd /home/tione/notebook/users/fhh/lapo_value_model
 .venv/bin/python -m compileall -q src
 .venv/bin/python -m pytest -q
 ```
 
-所有 GPU 命令都显式设置 `HIP_VISIBLE_DEVICES=6,7`，进程内对应 `cuda:0,cuda:1`。
+All GPU commands set `HIP_VISIBLE_DEVICES=6,7` explicitly.
 
-## 正式训练流水线
+## Official training pipeline
 
-各阶段均分离落盘；抽帧和 checkpoint 可恢复。
+Each stage writes to its own directory. Frame extraction and checkpoints are resumable.
 
-固定训练预算如下（“样本数”是包含 DDP 补齐/重采样的 sample presentations，不等同于去重 anchor 数）：
+Fixed budgets below. “Sample presentations” include DDP padding / resampling and are not unique-anchor counts.
 
-| 阶段 | micro-batch/卡 | 全局 batch | optimizer steps | sample presentations |
+| Stage | micro-batch/card | global batch | optimizer steps | sample presentations |
 |---|---:|---:|---:|---:|
-| LAPO Teacher，20 epochs | 112 | 224 | 37,460 | 8,391,040 |
+| LAPO teacher, 20 epochs | 112 | 224 | 37,460 | 8,391,040 |
 | screen-baseline | 160 | 320 | 400 | 128,000 |
 | screen-proposed | 160 | 320 | 400 | 128,000 |
 | screen-random | 160 | 320 | 400 | 128,000 |
 | screen-shuffled | 160 | 320 | 400 | 128,000 |
-| full baseline，3 epochs | 160 | 320 | 3,933 | 1,258,560 |
-| full proposed，3 epochs | 160 | 320 | 3,933 | 1,258,560 |
+| full baseline, 3 epochs | 160 | 320 | 3,933 | 1,258,560 |
+| full proposed, 3 epochs | 160 | 320 | 3,933 | 1,258,560 |
 
-Teacher 使用 AdamW，学习率 `5.25e-4`。Student 的 LoRA adapter 学习率为 `5e-5`，Value/Latent Head 学习率为 `5e-4`。四组 screen 严格使用相同 400-step 预算，只改变 latent 监督模式；它们用于消融诊断，不替代后续完整 baseline/proposed 训练。
+Teacher uses AdamW at `5.25e-4`. Student LoRA adapter LR is `5e-5`; value/latent head LR is `5e-4`. The four screen runs share the same 400-step budget and only change the latent supervision mode. They are diagnostic ablations, not a substitute for the full baseline/proposed trains.
 
 ```bash
 .venv/bin/lapo-value preflight --config configs/full.yaml
@@ -85,11 +131,11 @@ HIP_VISIBLE_DEVICES=6,7 .venv/bin/python -m torch.distributed.run \
   --run-name proposed --latent-mode true
 ```
 
-Teacher 的正式 latent 生成有质量门禁：validation reconstruction gain 必须大于 0。Student 每个 epoch 输出 rank-level validation Parquet，并以 macro Spearman 选择 best checkpoint。
+Official teacher latent generation has a quality gate: validation reconstruction gain must be > 0. Each student epoch writes rank-level validation Parquet; the best checkpoint is selected by macro Spearman.
 
-## 必做 ablation
+## Required ablations
 
-四个实验应使用相同 optimizer-step 预算：
+Four experiments must use the same optimizer-step budget:
 
 ```bash
 # A. 400-step no-LAPO screen
@@ -107,37 +153,35 @@ Teacher 的正式 latent 生成有质量门禁：validation reconstruction gain 
   --run-name screen-shuffled --latent-mode shuffled --max-optimizer-steps 400
 ```
 
-screen 完成后另起新目录完整训练 `baseline --latent-mode none` 和 `proposed --latent-mode true`，每组 3 epochs / 3,933 optimizer steps。最终 DROID 初始化模型只按 DROID validation macro-Spearman 在这两个完整 run 之间选择；相同时选择 baseline。后续 OpenPI 2k 实验使用严格 episode-level OOF，因此须报告为“OOF 微调评估”，不能再称作 untouched external holdout。
+After screening, train full `baseline --latent-mode none` and `proposed --latent-mode true` in new directories: 3 epochs / 3,933 optimizer steps each. The final DROID-initialized model is chosen only by DROID validation macro-Spearman between those two full runs; ties take baseline. Later OpenPI 2k runs use strict episode-level OOF, so they must be reported as OOF finetune evaluation.
 
-## OpenPI 302-rollout 五折 OOF 微调
+## OpenPI 302-rollout five-fold OOF finetune
 
-OpenPI 的 98 个 demonstration episodes 完全排除，只使用 302 个 rollout episodes（88 success / 214 failure）。30 Hz 原视频按 `[-20,-10,0]` 取三帧历史，Teacher future 为 `+10` 源帧；anchor 每 10 个源帧取一个，共 14,855 个。
+Demonstration episodes (98) are fully excluded. Only the 302 rollout episodes (88 success / 214 failure) are used.
 
-- 按 `dataset_name × outcome` 分层、episode 整体分到 5 折，每个 episode 恰好 held-out 一次；
-- 每 fold 从同一个 DROID 最终 checkpoint 初始化，训练 2,000 optimizer steps；
-- 全局 batch 320；先按 success/failure 1:1，再均匀采 episode、均匀采 episode 内 anchor；
-- LoRA LR `1e-5`，Value/Latent Head LR `1e-4`，warmup 100，cosine decay；
-- 每 100 step 原子保存完整可恢复 checkpoint，共 20 个/fold、100 个；
-- step 0、100…2000 都只在当折 held-out episodes 推理，step 2000 是预注册主结果，禁止按 OpenPI 曲线择优。
-
-严格 A50 使用 `50 model frames = 100 source frames`。在 10-source-frame anchor stride 下，每个 episode 会少 10 个可配对起点，因此实际是 11,835 个 A50 窗口；12,137 对应的是 9 个 anchor 间隔，即 A45，不采用该错位口径。
+- Stratify by `dataset_name × outcome` and assign whole episodes to 5 folds; each episode is held out exactly once.
+- Each fold initializes from the same final DROID checkpoint and trains 2,000 optimizer steps.
+- Global batch 320; sample success/failure 1:1, then uniformly over episodes and uniformly over anchors inside an episode.
+- LoRA LR `1e-5`, value/latent head LR `1e-4`, warmup 100, cosine decay.
+- Atomically save a full resumable checkpoint every 100 steps (20 per fold, 100 total).
+- Steps 0, 100, …, 2000 infer only on that fold’s held-out episodes. Step 2000 is the pre-registered primary result; do not pick a checkpoint from the OpenPI curve.
 
 ```bash
-# 1. CPU：生成密集 manifest、分折并抽取四帧 tar
+# 1. CPU: dense manifest, fold split, four-frame tars
 .venv/bin/lapo-value prepare-openpi-finetune --config configs/full.yaml --workers 4
 
-# 2. GPU：用正式 LAPO Teacher 生成 14,855 个 32D latent
+# 2. GPU: official LAPO teacher → 14,855 32D latents
 HIP_VISIBLE_DEVICES=6,7 .venv/bin/python -m torch.distributed.run \
   --standalone --nproc_per_node=2 \
   -m lapo_value_model.cli generate-openpi-latents --config configs/full.yaml
 
-# 3. 8 卡并行 fold 0–3，完成后用 6,7 跑 fold 4，并自动聚合/出报告
+# 3. 8-card parallel folds 0–3, then GPUs 6,7 for fold 4, then aggregate/report
 scripts/run_openpi_finetune_oof.sh
 ```
 
-正式输出在 `outputs/full/openpi_finetune_oof/`：每折 checkpoint/prediction、21 个 OOF prediction/advantage/metrics 文件、`curve_data.parquet`、`oof_report.json` 和 `report.html`。报告包含 first/mean/last episode AUC、三种 value gap、MAE/RMSE、成功回合 macro-Spearman、时间单调性、4-stage matched AUC、A50 效应量与 q70 positive-rate，以及 2,000 次 outcome-stratified episode bootstrap 95% CI。
+Official outputs live under `outputs/full/openpi_finetune_oof/`: per-fold checkpoints/predictions, 21 OOF prediction/advantage/metrics files, `curve_data.parquet`, `oof_report.json`, and `report.html`. The report includes first/mean/last episode AUC, three value-gap metrics, MAE/RMSE, success-episode macro-Spearman, temporal monotonicity, 4-stage matched AUC, A50 effect size and q70 positive-rate, plus 2,000 outcome-stratified episode bootstrap 95% CIs.
 
-## Test 评估与部署导出
+## Test evaluation and deployment export
 
 ```bash
 HIP_VISIBLE_DEVICES=6,7 .venv/bin/python -m torch.distributed.run \
@@ -149,17 +193,17 @@ HIP_VISIBLE_DEVICES=6,7 .venv/bin/python -m torch.distributed.run \
   --run-name proposed --checkpoint best.pt
 ```
 
-评估报告包含 MAE/RMSE、episode macro Spearman、成功轨迹时间单调性、成功/失败 AUC、按任务分组指标、stage-matched AUC 与 advantage 符号质量，并核对 test anchor 100% 覆盖。
+The eval report includes MAE/RMSE, episode macro Spearman, success-trajectory temporal monotonicity, success/failure AUC, per-task metrics, stage-matched AUC, and advantage sign quality, and checks 100% test-anchor coverage.
 
-导出目录位于 `outputs/full/student/proposed/export`，包含：
+Export directory: `outputs/full/student/proposed/export`
 
-- 标准 PEFT adapter；
-- 不含 Latent Head 的 `deployment_state.safetensors`；
-- 201-bin Value Head；
-- Qwen3‑VL processor；
-- manifest 和 SHA-256 校验和。
+- standard PEFT adapter
+- `deployment_state.safetensors` without the latent head
+- 201-bin value head
+- Qwen3-VL processor
+- manifest and SHA-256 checksums
 
-回载方式：
+Reload:
 
 ```python
 from lapo_value_model.deployment import load_exported_model
@@ -168,4 +212,4 @@ model, processor = load_exported_model("outputs/full/student/proposed/export", d
 assert model.latent_head is None
 ```
 
-`configs/smoke.yaml` 可对整条链路做小规模确定性验证，但 smoke 指标不用于判断最终模型质量。
+`configs/smoke.yaml` runs a small deterministic check of the full chain. Smoke metrics are not used to judge final model quality.
